@@ -1,0 +1,5 @@
+{
+  "name": "CYEG Weather Model Accuracy Tracker",
+  "description": "A client-side web application that fetches weather forecasts hourly from multiple models, verifies them against real-time airport observations (METAR/SPECI), and displays interactive leaderboards and charts to rank model accuracy over various timeframes.",
+  "requestFramePermissions": []
+}
