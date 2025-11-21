@@ -1,7 +1,8 @@
+
 import React from 'react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Cell } from 'recharts';
 import { BucketName, ModelVariableStats } from '../types';
-import { BUCKET_LABELS, VARIABLE_LABELS } from '../constants';
+import { BUCKET_LABELS, VARIABLE_LABELS, MODEL_LABELS } from '../constants';
 
 interface LeaderboardChartProps {
   data: ModelVariableStats[];
@@ -11,14 +12,12 @@ interface LeaderboardChartProps {
 
 const LeaderboardChart: React.FC<LeaderboardChartProps> = ({ data, bucketName, selectedVariable }) => {
   const chartData = data
-    .filter(d => d.variable === selectedVariable)
+    .filter(d => d.variable === selectedVariable && d.n > 0) // Filter empty data
     .sort((a, b) => a.mae - b.mae) // Sort ascending by error (best first)
-    .slice(0, 12)
+    .slice(0, 14) // Show top 14
     .map((d, i) => ({
       ...d,
-      name: d.model_id === 'average_of_models' ? 'Avg (Consensus)' :
-            d.model_id === 'median_of_models' ? 'Median (Robust)' :
-            d.model_id.toUpperCase(),
+      name: MODEL_LABELS[d.model_id] || d.model_id.toUpperCase(),
       rank: i
     }));
     // Note: Recharts vertical layout renders data top-to-bottom.

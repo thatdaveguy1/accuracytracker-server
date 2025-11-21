@@ -1,5 +1,5 @@
 
-import { ENDPOINTS, HOURLY_VARS, parseUTC, FORECAST_VARIABLES, VERIFICATION_VARIABLES, LEAD_TIME_BUCKETS, LOCATION, MIN_MAE_THRESHOLDS, MISSING_DATA_PENALTY_SCORE } from '../constants';
+import { MODELS, HOURLY_VARS, parseUTC, FORECAST_VARIABLES, VERIFICATION_VARIABLES, LEAD_TIME_BUCKETS, LOCATION, MIN_MAE_THRESHOLDS, MISSING_DATA_PENALTY_SCORE, type ModelConfig } from '../constants';
 import type { Forecast, Observation, Verification, BucketName, ModelVariableStats, LeaderboardRow } from '../types';
 import * as db from './db';
 
@@ -148,21 +148,30 @@ export async function fetchMETARHistory(): Promise<Observation[]> {
   return [];
 }
 
-async function storeForecast(endpoint: string, data: any, issueTime: number): Promise<void> {
+async function storeForecast(modelId: string, apiModel: string | undefined, data: any, issueTime: number): Promise<void> {
   const times = data.hourly.time;
   const forecasts: Forecast[] = [];
   
+  // Helper to safely extract variable, trying both standard name and suffixed name (e.g. temp_2m_gem_hrdps)
+  const getVal = (baseName: string, index: number): number | null => {
+      const std = data.hourly[baseName]?.[index];
+      if (std !== undefined) return std;
+      if (apiModel) {
+          const suffixed = data.hourly[`${baseName}_${apiModel}`]?.[index];
+          if (suffixed !== undefined) return suffixed;
+      }
+      return null;
+  };
+
   for (let i = 0; i < times.length; i++) {
     const validTime = parseUTC(times[i]);
     
-    // FIX: Removed the "Time Travel" logic. 
-    // The issueTime passed in (System Time) is the most reliable anchor.
     const recordIssueTime = issueTime;
 
-    let precip = data.hourly.precipitation?.[i] ?? null;
-    let rain = data.hourly.rain?.[i] ?? null;
-    let showers = data.hourly.showers?.[i] ?? null;
-    let snowfall = data.hourly.snowfall?.[i] ?? null;
+    let precip = getVal('precipitation', i);
+    let rain = getVal('rain', i);
+    let showers = getVal('showers', i);
+    let snowfall = getVal('snowfall', i);
 
     if (precip === 0) {
         if (rain === null) rain = 0;
@@ -170,38 +179,42 @@ async function storeForecast(endpoint: string, data: any, issueTime: number): Pr
         if (snowfall === null) snowfall = 0;
     }
 
+    // Check if critical data exists for this hour
+    const temp = getVal('temperature_2m', i);
+    if (temp === null) continue; // Skip hours with no valid core data
+
     const record: Forecast = {
-        id: `${endpoint}_${recordIssueTime}_${validTime}`,
-        model_id: endpoint,
+        id: `${modelId}_${recordIssueTime}_${validTime}`,
+        model_id: modelId,
         issue_time: recordIssueTime,
         valid_time: validTime,
-        temperature_2m: data.hourly.temperature_2m?.[i] ?? null,
-        dew_point_2m: data.hourly.dew_point_2m?.[i] ?? null,
-        wind_speed_10m: data.hourly.wind_speed_10m?.[i] ?? null,
-        wind_direction_10m: data.hourly.wind_direction_10m?.[i] ?? null,
-        wind_gusts_10m: data.hourly.wind_gusts_10m?.[i] ?? null,
-        pressure_msl: data.hourly.pressure_msl?.[i] ?? null,
-        visibility: data.hourly.visibility?.[i] !== null ? data.hourly.visibility[i] / 1000 : null,
-        relative_humidity_2m: data.hourly.relative_humidity_2m?.[i] ?? null,
-        apparent_temperature: data.hourly.apparent_temperature?.[i] ?? null,
+        temperature_2m: temp,
+        dew_point_2m: getVal('dew_point_2m', i),
+        wind_speed_10m: getVal('wind_speed_10m', i),
+        wind_direction_10m: getVal('wind_direction_10m', i),
+        wind_gusts_10m: getVal('wind_gusts_10m', i),
+        pressure_msl: getVal('pressure_msl', i),
+        visibility: getVal('visibility', i) !== null ? getVal('visibility', i)! / 1000 : null,
+        relative_humidity_2m: getVal('relative_humidity_2m', i),
+        apparent_temperature: getVal('apparent_temperature', i),
         precipitation: precip,
         snowfall: snowfall,
-        snow_depth: data.hourly.snow_depth?.[i] ?? null,
+        snow_depth: getVal('snow_depth', i),
         rain: rain,
         showers: showers,
-        weather_code: data.hourly.weather_code?.[i] ?? null,
-        cloud_cover: data.hourly.cloud_cover?.[i] ?? null,
-        cloud_cover_low: data.hourly.cloud_cover_low?.[i] ?? null,
-        cloud_cover_mid: data.hourly.cloud_cover_mid?.[i] ?? null,
-        cloud_cover_high: data.hourly.cloud_cover_high?.[i] ?? null,
-        cape: data.hourly.cape?.[i] ?? null,
-        precipitation_probability: data.hourly.precipitation_probability?.[i] ?? null,
-        cloud_base_agl: data.hourly.cloud_base_agl?.[i] ?? null
+        weather_code: getVal('weather_code', i),
+        cloud_cover: getVal('cloud_cover', i),
+        cloud_cover_low: getVal('cloud_cover_low', i),
+        cloud_cover_mid: getVal('cloud_cover_mid', i),
+        cloud_cover_high: getVal('cloud_cover_high', i),
+        cape: getVal('cape', i),
+        precipitation_probability: getVal('precipitation_probability', i),
+        cloud_base_agl: getVal('cloud_base_agl', i)
     };
     forecasts.push(record);
   }
   await db.bulkPut('forecasts', forecasts);
-  log(`[STORE] ${endpoint}: Stored ${forecasts.length} forecast hours`);
+  log(`[STORE] ${modelId}: Stored ${forecasts.length} forecast hours`);
 }
 
 async function generateSyntheticModels(issueTime: number): Promise<void> {
@@ -286,38 +299,41 @@ export async function fetchAllModels() {
   const startSystemTime = Date.now();
   log(`[FETCH] Starting model fetch. Anchor System time: ${new Date(startSystemTime).toISOString()}`);
   
-  // FIX: We use the same system time for ALL models in this cycle.
   const commonIssueTime = startSystemTime;
-
   const BATCH_SIZE = 4;
-  for (let i = 0; i < ENDPOINTS.length; i += BATCH_SIZE) {
-    const batch = ENDPOINTS.slice(i, i + BATCH_SIZE);
+
+  for (let i = 0; i < MODELS.length; i += BATCH_SIZE) {
+    const batch = MODELS.slice(i, i + BATCH_SIZE);
     log(`[FETCH] Processing batch ${Math.floor(i/BATCH_SIZE) + 1}...`);
     
-    const batchPromises = batch.map(async ({name, days}) => {
-      const url = `https://api.open-meteo.com/v1/${name}?latitude=${LOCATION.lat}&longitude=${LOCATION.lon}&hourly=${HOURLY_VARS}&timezone=UTC&forecast_days=${days}&past_days=1`;
+    const batchPromises = batch.map(async (config) => {
+      let url = `https://api.open-meteo.com/v1/${config.provider}?latitude=${LOCATION.lat}&longitude=${LOCATION.lon}&hourly=${HOURLY_VARS}&timezone=UTC&forecast_days=${config.days}&past_days=1`;
+      
+      if (config.apiModel) {
+          url += `&models=${config.apiModel}`;
+      }
       
       try {
         const response = await fetchWithRetry(url, 3, 1000); 
         const data = await response.json();
 
         if (data && data.hourly && Array.isArray(data.hourly.time)) {
-            log(`[FETCH] ${name}: Success, ${data.hourly.time.length} hours received`);
+            log(`[FETCH] ${config.id}: Success, ${data.hourly.time.length} hours received`);
             if (data.hourly.time.length <= 24) return;
 
-            await storeForecast(name, data, commonIssueTime);
+            await storeForecast(config.id, config.apiModel, data, commonIssueTime);
         } else {
-            log(`[FETCH] ${name}: Invalid data structure.`);
+            log(`[FETCH] ${config.id}: Invalid data structure.`);
         }
       } catch (error) {
-          log(`[FETCH] ${name}: Failed - ${error instanceof Error ? error.message : String(error)}`);
-          await db.setMetadata(`model_unavailable_${name}`, String(error));
+          log(`[FETCH] ${config.id}: Failed - ${error instanceof Error ? error.message : String(error)}`);
+          await db.setMetadata(`model_unavailable_${config.id}`, String(error));
       }
     });
     
     await Promise.all(batchPromises);
     
-    if (i + BATCH_SIZE < ENDPOINTS.length) {
+    if (i + BATCH_SIZE < MODELS.length) {
       await new Promise(resolve => setTimeout(resolve, 1000)); // Rate limit spacing
     }
   }
@@ -385,8 +401,7 @@ export async function runVerification(): Promise<void> {
     for (const forecast of matchingForecasts) {
       const leadTime = (forecast.valid_time - forecast.issue_time) / (3600 * 1000);
       
-      // FIX: Allow negative lead times (hindcasts) down to -24h to support immediate verification 
-      // of the current model run against recent observations.
+      // Allow negative lead times (hindcasts) down to -24h
       if (leadTime < -24) continue;
 
       for (const { name, obsKey } of VERIFICATION_VARIABLES) {

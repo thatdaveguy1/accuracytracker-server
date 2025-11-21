@@ -2,7 +2,7 @@
 import type { BucketName } from './types';
 
 export const DB_NAME = 'cyeg_weather_tracker';
-export const DB_VERSION = 8; 
+export const DB_VERSION = 10; 
 
 // Location: Edmonton International Airport (CYEG)
 export const LOCATION = {
@@ -11,16 +11,50 @@ export const LOCATION = {
   name: 'CYEG'
 };
 
-export const ENDPOINTS = [
-  {name: 'gem', days: 10},
-  {name: 'gfs', days: 16},
-  {name: 'ecmwf', days: 15},
-  {name: 'dwd-icon', days: 7},
-  {name: 'jma', days: 11},
-  {name: 'cma', days: 10},
-  {name: 'meteofrance', days: 4},
-  {name: 'bom', days: 10}
+export interface ModelConfig {
+  id: string;
+  provider: string;
+  apiModel?: string;
+  days: number;
+  label: string;
+}
+
+export const MODELS: ModelConfig[] = [
+  // --- Core Global Models ---
+  { id: 'ecmwf', provider: 'ecmwf', days: 15, label: 'ECMWF IFS 0.25°' },
+  { id: 'gfs', provider: 'gfs', days: 16, label: 'NOAA GFS' },
+  { id: 'gem', provider: 'gem', days: 10, label: 'GEM Global' },
+  { id: 'dwd-icon', provider: 'dwd-icon', days: 7, label: 'DWD ICON' },
+  { id: 'jma', provider: 'jma', days: 11, label: 'JMA GSM' },
+  { id: 'cma', provider: 'cma', days: 10, label: 'CMA GRAPES' },
+  { id: 'meteofrance', provider: 'meteofrance', days: 4, label: 'Météo-France ARPEGE' },
+
+  // --- Connection Fixes (Using dedicated providers) ---
+  // Use dedicated providers. Removing apiModel lets Open-Meteo default to the main model 
+  // (e.g., ukmo_global_deterministic_10km) without suffixes, which avoids parsing errors.
+  { id: 'ukmo', provider: 'ukmo', days: 7, label: 'UK Met Office UKMO' },
+  { id: 'bom', provider: 'bom', days: 10, label: 'BOM ACCESS-G' },
+  
+  // --- AI & Experimental Models ---
+  // AIFS must use the generic 'forecast' provider to support the specific model parameter correctly.
+  { id: 'ecmwf-aifs', provider: 'forecast', apiModel: 'ecmwf_aifs025', days: 10, label: 'ECMWF AIFS' },
+  { id: 'gfs-graphcast', provider: 'forecast', apiModel: 'gfs_graphcast025', days: 10, label: 'GFS GraphCast' },
+  
+  // --- Regional Models (Valid for Canada) ---
+  { id: 'gem-hrdps', provider: 'forecast', apiModel: 'gem_hrdps_continental', days: 2, label: 'GEM HRDPS' },
+  { id: 'gem-regional', provider: 'forecast', apiModel: 'gem_regional_10km', days: 2, label: 'GEM Regional' },
+
+  // --- Additional Global Models ---
+  { id: 'ecmwf-04', provider: 'ecmwf', apiModel: 'ecmwf_ifs04', days: 10, label: 'ECMWF IFS 0.4°' },
+  { id: 'gfs-025', provider: 'gfs', apiModel: 'gfs025', days: 16, label: 'NOAA GFS 0.25°' },
 ];
+
+// Removed HRRR and NAM: CYEG (53.3N) is strictly outside their domain (CONUS).
+
+export const MODEL_LABELS: Record<string, string> = MODELS.reduce((acc, m) => ({...acc, [m.id]: m.label}), {
+    'average_of_models': 'Average (Consensus)',
+    'median_of_models': 'Median (Robust)'
+} as Record<string, string>);
 
 export const HOURLY_VARS = 'temperature_2m,dew_point_2m,wind_speed_10m,wind_direction_10m,' +
   'wind_gusts_10m,pressure_msl,visibility,relative_humidity_2m,apparent_temperature,' +
@@ -76,7 +110,7 @@ export const VARIABLE_LABELS: Record<string, string> = {
 };
 
 export const LEAD_TIME_BUCKETS: Record<BucketName, [number, number]> = {
-  '24h': [-24, 24], // Allows verifying immediate past hours from current fetch
+  '24h': [-24, 24], 
   '48h': [47, 49],
   '72h': [71, 73],
   '5day': [119, 121],
@@ -96,7 +130,6 @@ export const BUCKET_LABELS: Record<BucketName, string> = {
 export const ALL_BUCKETS = Object.keys(LEAD_TIME_BUCKETS) as BucketName[];
 
 export const parseUTC = (isoString: string): number => {
-    // Fix for Safari/Cross-browser ISO parsing issues
     if (!isoString) return 0;
     let s = isoString.trim();
     if (!s.endsWith('Z') && !s.includes('+') && !s.includes('-')) {
@@ -126,6 +159,4 @@ export const MIN_MAE_THRESHOLDS: Record<string, number> = {
     'precip_probability': 0.05 // 0.05 Brier
 };
 
-// Normalized Score Penalty for Missing Data
-// 2.5 means "2.5x worse than the consensus/threshold error"
 export const MISSING_DATA_PENALTY_SCORE = 2.5;

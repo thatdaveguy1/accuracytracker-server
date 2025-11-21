@@ -2,6 +2,7 @@
 import React from 'react';
 import type { LeaderboardRow } from '../types';
 import { Trophy, Info, Calculator } from 'lucide-react';
+import { MODEL_LABELS } from '../constants';
 
 interface LeaderboardTableProps {
   data: LeaderboardRow[];
@@ -9,12 +10,13 @@ interface LeaderboardTableProps {
 }
 
 const modelDisplay = (modelId: string) => {
-    if (modelId === 'average_of_models') return 'Average (Consensus)';
-    if (modelId === 'median_of_models') return 'Median (Robust)';
-    return modelId.toUpperCase();
+    return MODEL_LABELS[modelId] || modelId.toUpperCase();
 };
 
 const LeaderboardTable: React.FC<LeaderboardTableProps> = ({ data, isComposite = false }) => {
+  // Filter out empty rows to hide models with no data
+  const validData = data.filter(row => row.total_verifications > 0);
+
   return (
     <div className="flex flex-col h-full space-y-4">
       {/* Card Container */}
@@ -51,7 +53,7 @@ const LeaderboardTable: React.FC<LeaderboardTableProps> = ({ data, isComposite =
                 </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-                {data.map((row, i) => {
+                {validData.map((row, i) => {
                 let rowClass = "group transition-all duration-200 hover:bg-white/5";
                 let rankBadge = null;
                 
