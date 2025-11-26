@@ -1,6 +1,9 @@
 
 export type BucketName = '24h' | '48h' | '72h' | '5day' | '7day' | '10day';
 
+/**
+ * Represents a single hour of forecast data from a model.
+ */
 export interface Forecast {
   id: string;
   model_id: string;
@@ -26,14 +29,19 @@ export interface Forecast {
   cloud_cover_mid: number | null;
   cloud_cover_high: number | null;
   cape: number | null;
-  // New fields
   precipitation_probability: number | null;
   cloud_base_agl: number | null;
 }
 
+/**
+ * Represents a ground truth observation.
+ * Combines METAR (station) data with ERA5 (reanalysis) data for missing metrics.
+ */
 export interface Observation {
   obs_time: number;
-  report_type: 'METAR' | 'SPECI';
+  report_type: 'METAR' | 'SPECI' | 'SYNTHETIC';
+  
+  // Direct METAR Readings
   temperature: number | null;
   dewpoint: number | null;
   wind_dir: number | null;
@@ -42,10 +50,18 @@ export interface Observation {
   visibility: number | null;
   pressure_msl: number | null;
   raw_text: string;
-  // New fields
-  precip_1h: number | null; // mm
-  ceiling_agl: number | null; // meters (lowest BKN/OVC)
-  weather_codes: string[]; // Parsed phenomena e.g. ['RA', 'SN', 'BR']
+  
+  // Parsed METAR Fields
+  precip_1h: number | null; // mm (Often unreliable in METAR)
+  ceiling_agl: number | null; // meters
+  weather_codes: string[]; // e.g. ['RA', 'SN', 'BR']
+  
+  // ERA5 / Reanalysis Fallbacks
+  // Used when METAR does not provide specific amounts (Snow) or is missing data (Gusts)
+  era_snow_amt: number | null;
+  era_precip_amt: number | null;
+  era_rain_amt: number | null;
+  era_wind_gust: number | null;
 }
 
 export interface Verification {
@@ -75,6 +91,7 @@ export interface ModelVariableStats {
   correlation: number | null;
   index_of_agreement: number | null;
   skill_score: number | null;
+  std_error: number | null; // Standard Error of the Mean (for Significance)
   n: number;
 }
 
@@ -86,5 +103,6 @@ export interface LeaderboardRow {
   avg_bias: number;
   avg_corr: number | null;
   avg_skill: number | null;
+  std_error: number | null;
   total_verifications: number;
 }

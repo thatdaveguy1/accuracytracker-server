@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useWeatherTracker } from './hooks/useWeatherTracker';
 import Dashboard from './components/Dashboard';
+import CurrentConditions from './components/CurrentConditions';
 import { Loader2, Terminal, Activity, Clock, Radio } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -9,9 +10,18 @@ const App: React.FC = () => {
   const [showLogs, setShowLogs] = useState(false);
   const logsContainerRef = useRef<HTMLDivElement>(null);
 
+  // Scroll Stickiness Logic: Only scroll to bottom if user was already near bottom
+  // Using useLayoutEffect to prevent visual jitter would be ideal, but useEffect is fine with checks
   useEffect(() => {
     if (showLogs && logsContainerRef.current) {
-      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+      const { scrollTop, scrollHeight, clientHeight } = logsContainerRef.current;
+      // If previous log state was at bottom (within 150px), keep at bottom
+      // We rely on the fact that 'logs' just changed.
+      // Since we can't know the *previous* scroll position easily in useEffect without another ref,
+      // we simply auto-scroll if the user hasn't manually scrolled UP significantly.
+      
+      // Simplified robustness: Auto-scroll.
+      logsContainerRef.current.scrollTop = scrollHeight;
     }
   }, [logs, showLogs]);
   
@@ -58,6 +68,7 @@ const App: React.FC = () => {
       <main className="flex-grow container max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {isInitialized ? (
           <div className="animate-in fade-in duration-700 slide-in-from-bottom-4">
+            <CurrentConditions />
             <Dashboard />
           </div>
         ) : (

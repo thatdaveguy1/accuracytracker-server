@@ -13,6 +13,16 @@ const modelDisplay = (modelId: string) => {
     return MODEL_LABELS[modelId] || modelId.toUpperCase();
 };
 
+const formatScore = (val: number | null | undefined) => {
+    if (val === null || val === undefined || !Number.isFinite(val)) return '--';
+    return val.toFixed(3);
+};
+
+const formatBias = (val: number | null | undefined) => {
+    if (val === null || val === undefined || !Number.isFinite(val)) return '--';
+    return (val > 0 ? '+' : '') + val.toFixed(2);
+};
+
 const LeaderboardTable: React.FC<LeaderboardTableProps> = ({ data, isComposite = false }) => {
   // Filter out empty rows to hide models with no data
   const validData = data.filter(row => row.total_verifications > 0);
@@ -45,7 +55,7 @@ const LeaderboardTable: React.FC<LeaderboardTableProps> = ({ data, isComposite =
                 </th>
                 {!isComposite && (
                     <>
-                        <th className="px-4 py-3 font-medium tracking-wider text-right border-b border-white/5">RMSE</th>
+                        <th className="px-4 py-3 font-medium tracking-wider text-right border-b border-white/5">Std Err</th>
                         <th className="px-4 py-3 font-medium tracking-wider text-right border-b border-white/5">Bias</th>
                     </>
                 )}
@@ -83,15 +93,15 @@ const LeaderboardTable: React.FC<LeaderboardTableProps> = ({ data, isComposite =
                         </div>
                     </td>
                     <td className={`px-4 py-3 text-right font-mono font-bold text-base drop-shadow-sm ${isComposite ? 'text-yellow-400' : 'text-cyan-300'}`}>
-                        {row.avg_mae.toFixed(3)}
+                        {formatScore(row.avg_mae)}
                     </td>
                     {!isComposite && (
                         <>
-                            <td className="px-4 py-3 text-right font-mono text-slate-400">
-                                {row.avg_rmse.toFixed(3)}
+                            <td className="px-4 py-3 text-right font-mono text-slate-500 text-xs">
+                                {row.std_error ? `±${row.std_error.toFixed(3)}` : '-'}
                             </td>
                             <td className={`px-4 py-3 text-right font-mono font-medium ${row.avg_bias > 0 ? 'text-red-400' : row.avg_bias < 0 ? 'text-blue-400' : 'text-slate-500'}`}>
-                                {row.avg_bias > 0 ? '+' : ''}{row.avg_bias.toFixed(3)}
+                                {formatBias(row.avg_bias)}
                             </td>
                         </>
                     )}
@@ -115,13 +125,7 @@ const LeaderboardTable: React.FC<LeaderboardTableProps> = ({ data, isComposite =
                  </div>
                  <div className="text-xs space-y-1 flex-grow">
                     <h4 className="font-bold text-slate-200 uppercase tracking-wide mb-1">How the Overall Score Works</h4>
-                    <p>The <strong className="text-yellow-400">Overall Score</strong> is a normalized performance index that aggregates model accuracy across all tracked variables (Temperature, Wind, Precip, etc.).</p>
-                    <p className="mt-2">
-                        It compares each model's error against the <span className="text-emerald-400">Consensus (Average) of All Models</span> for every single category. 
-                        A score of <strong className="text-white">1.00</strong> represents average performance. 
-                        Scores <strong className="text-cyan-400">below 1.0</strong> are better than average.
-                        Models missing data for specific variables receive a <strong className="text-red-400">2.50 penalty</strong> for that category.
-                    </p>
+                    <p>The <strong className="text-yellow-400">Overall Score</strong> is a normalized performance index.</p>
                  </div>
              </div>
          ) : (
@@ -131,10 +135,10 @@ const LeaderboardTable: React.FC<LeaderboardTableProps> = ({ data, isComposite =
                 </div>
                 <div className="text-xs space-y-2 flex-grow">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2">
-                        <p className="flex items-center gap-2"><span className="w-1 h-1 bg-cyan-500 rounded-full"></span><span><strong className="text-slate-300">MAE:</strong> Mean Absolute Error (or Mean Vector Error)</span></p>
-                        <p className="flex items-center gap-2"><span className="w-1 h-1 bg-slate-500 rounded-full"></span><span><strong className="text-slate-300">RMSE:</strong> Root Mean Squared Error (or Vector RMSE)</span></p>
-                        <p className="flex items-center gap-2"><span className="w-1 h-1 bg-red-400 rounded-full"></span><span><strong className="text-slate-300">Bias (+):</strong> Over-forecasting</span></p>
-                        <p className="flex items-center gap-2"><span className="w-1 h-1 bg-blue-400 rounded-full"></span><span><strong className="text-slate-300">Bias (-):</strong> Under-forecasting</span></p>
+                        <p className="flex items-center gap-2"><span className="w-1 h-1 bg-cyan-500 rounded-full"></span><span><strong className="text-slate-300">MAE:</strong> Mean Abs Error</span></p>
+                        <p className="flex items-center gap-2"><span className="w-1 h-1 bg-slate-500 rounded-full"></span><span><strong className="text-slate-300">Std Err:</strong> Standard Error (Confidence)</span></p>
+                        <p className="flex items-center gap-2"><span className="w-1 h-1 bg-red-400 rounded-full"></span><span><strong className="text-slate-300">Bias (+):</strong> Over-forecast</span></p>
+                        <p className="flex items-center gap-2"><span className="w-1 h-1 bg-blue-400 rounded-full"></span><span><strong className="text-slate-300">Bias (-):</strong> Under-forecast</span></p>
                     </div>
                 </div>
             </div>

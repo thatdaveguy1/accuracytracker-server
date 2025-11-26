@@ -15,7 +15,6 @@ export const openDB = (): Promise<IDBDatabase> => {
     request.onupgradeneeded = (e) => {
       const dbInstance = (e.target as IDBOpenDBRequest).result;
       const tx = (e.target as IDBOpenDBRequest).transaction;
-      // const oldVersion = e.oldVersion; // Unused now, safer upgrades only.
 
       if (!tx) {
           console.error('[DB] No transaction available during onupgradeneeded.');
@@ -26,22 +25,22 @@ export const openDB = (): Promise<IDBDatabase> => {
       let forecastStore: IDBObjectStore;
       if (!dbInstance.objectStoreNames.contains('forecasts')) {
         forecastStore = dbInstance.createObjectStore('forecasts', {keyPath: 'id'});
-        forecastStore.createIndex('by_valid_time', 'valid_time');
-        forecastStore.createIndex('by_model', 'model_id');
       } else {
         forecastStore = tx.objectStore('forecasts');
       }
       
-      // New index for ETA calculation
-      if (!forecastStore.indexNames.contains('by_issue_time')) {
-        forecastStore.createIndex('by_issue_time', 'issue_time');
-      }
+      if (!forecastStore.indexNames.contains('by_valid_time')) forecastStore.createIndex('by_valid_time', 'valid_time');
+      if (!forecastStore.indexNames.contains('by_model')) forecastStore.createIndex('by_model', 'model_id');
+      if (!forecastStore.indexNames.contains('by_issue_time')) forecastStore.createIndex('by_issue_time', 'issue_time');
       
       // Observations store
+      let obsStore: IDBObjectStore;
       if (!dbInstance.objectStoreNames.contains('observations')) {
-        const store = dbInstance.createObjectStore('observations', {keyPath: 'obs_time'});
-        store.createIndex('by_time', 'obs_time');
+        obsStore = dbInstance.createObjectStore('observations', {keyPath: 'obs_time'});
+      } else {
+        obsStore = tx.objectStore('observations');
       }
+      if (!obsStore.indexNames.contains('by_time')) obsStore.createIndex('by_time', 'obs_time');
       
       // Verification store
       let verificationStore: IDBObjectStore;
@@ -172,7 +171,6 @@ export const cleanupOldDataDB = async (cutoff: number): Promise<number> => {
     }
 
     // 2. Forecasts & Verifications: Delete via Cursor (Batched to prevent UI blocking)
-    // These stores don't have time as primary key, so we must use index cursors.
     const stores: ('forecasts' | 'verification')[] = ['forecasts', 'verification'];
     
     for (const storeName of stores) {

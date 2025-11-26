@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as db from '../services/db';
 import * as weatherService from '../services/weatherService';
@@ -46,21 +47,33 @@ export const useWeatherTracker = () => {
             log('[APP] Update already in progress, skipping.');
             return;
         }
+
         isRunning.current = true;
         
         try {
             await db.openDB();
             
+            // Prevent redundant updates if last run was < 5 mins ago (unless forced)
+            const lastRun = await db.getMetadata<number>('last_run_end');
+            if (!forceForecastFetch && lastRun && (Date.now() - lastRun < 5 * 60 * 1000)) {
+                 log('[APP] Data is up to date (Cached). Skipping refresh.');
+                 setLastUpdated(lastRun);
+                 isRunning.current = false;
+                 return;
+            }
+
             const lastFetch = await db.getMetadata<number>('last_forecast_fetch');
             const oneHourAgo = Date.now() - 3600 * 1000;
             
+            // FORECAST FETCH LOGIC:
+            // Only fetch if forced OR last fetch was > 1 hour ago
             if (forceForecastFetch || !lastFetch || lastFetch < oneHourAgo) {
                 if (forceForecastFetch) log('[APP] Forcing forecast fetch.');
-                else log('[APP] Last forecast fetch >1h ago or never, fetching all models...');
+                else log('[APP] New forecast cycle detected or cache expired.');
                 setStatus('Fetching models...');
                 await weatherService.fetchAllModels();
             } else {
-                log(`[APP] Using cached forecasts from ${new Date(lastFetch).toISOString()}`);
+                log(`[APP] Forecasts cached (Updated: ${new Date(lastFetch).toLocaleTimeString()})`);
             }
 
             setStatus('Fetching observations...');
@@ -72,14 +85,15 @@ export const useWeatherTracker = () => {
             const obsCount = await db.getCount('observations');
             if (obsCount < 2) {
                 log('[APP] Leaderboard will activate after 2nd observation arrives.');
-            } else {
-                log(`[APP] Leaderboard active with ${obsCount} observations`);
             }
             
             setStatus('Cleaning up old data...');
             await weatherService.cleanupOldData();
 
-            setLastUpdated(Date.now());
+            const now = Date.now();
+            setLastUpdated(now);
+            await db.setMetadata('last_run_end', now);
+            
             setStatus('Idle');
             log('[APP] Update cycle complete.');
 
