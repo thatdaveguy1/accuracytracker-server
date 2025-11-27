@@ -39,23 +39,24 @@ export interface Forecast {
  */
 export interface Observation {
   obs_time: number;
-  report_type: 'METAR' | 'SPECI' | 'SYNTHETIC';
-  
+  report_type: string; // "METAR", "SPECI", "SYNTHETIC", or "METAR+XSPECI"
+
   // Direct METAR Readings
   temperature: number | null;
   dewpoint: number | null;
   wind_dir: number | null;
+  wind_variable?: boolean;
   wind_speed: number | null;
   wind_gust: number | null;
   visibility: number | null;
   pressure_msl: number | null;
   raw_text: string;
-  
+
   // Parsed METAR Fields
   precip_1h: number | null; // mm (Often unreliable in METAR)
   ceiling_agl: number | null; // meters
   weather_codes: string[]; // e.g. ['RA', 'SN', 'BR']
-  
+
   // ERA5 / Reanalysis Fallbacks
   // Used when METAR does not provide specific amounts (Snow) or is missing data (Gusts)
   era_snow_amt: number | null;
