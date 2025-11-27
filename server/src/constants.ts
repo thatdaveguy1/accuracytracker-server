@@ -30,6 +30,9 @@ export const FULL_VARS = `${BASE_VARS},visibility,precipitation_probability,clou
 // Excludes variables often missing (Visibility, Ceiling, CAPE)
 export const LIMITED_VARS = 'temperature_2m,dew_point_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,precipitation,cloud_cover';
 
+// 4. GraphCast Specific: Strictly limited to supported variables to avoid 400/Nulls
+export const GRAPHCAST_VARS = 'temperature_2m,pressure_msl,cloud_cover,precipitation,wind_speed_10m,wind_direction_10m';
+
 // Default export for generic use
 export const HOURLY_VARS = FULL_VARS;
 
@@ -58,10 +61,10 @@ export const MODELS: ModelConfig[] = [
     { id: 'ukmo', provider: 'forecast', apiModel: 'ukmo_global_deterministic_10km', days: 7, label: 'UKMO Global Deterministic 0.09°', vars: LIMITED_VARS },
     { id: 'kma', provider: 'forecast', apiModel: 'kma_gdps', days: 10, label: 'KMA GDPS 0.13°', vars: LIMITED_VARS },
 
+
     // --- AI & Experimental Models ---
-    // Strictly limited variables to prevent 400 errors
     { id: 'ecmwf-aifs', provider: 'ensemble', apiModel: 'ecmwf_aifs025', days: 15, label: 'AIFS 0.25° Single', vars: LIMITED_VARS },
-    { id: 'gfs-graphcast', provider: 'forecast', apiModel: 'gfs_graphcast025', days: 10, label: 'GFS GraphCast 0.25°', vars: LIMITED_VARS },
+    { id: 'gfs-graphcast', provider: 'forecast', apiModel: 'gfs_graphcast025', days: 10, label: 'GraphCast 0.25°', vars: GRAPHCAST_VARS },
 
     // --- Regional Models ---
     { id: 'gem-hrdps', provider: 'forecast', apiModel: 'gem_hrdps_continental', days: 2, label: 'HRDPS', vars: LIMITED_VARS },
