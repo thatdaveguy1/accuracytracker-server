@@ -1,7 +1,7 @@
 
 import { MODELS, HOURLY_VARS, BASE_VARS, FULL_VARS, LIMITED_VARS, parseUTC, FORECAST_VARIABLES, VERIFICATION_VARIABLES, LEAD_TIME_BUCKETS, LOCATION, MIN_MAE_THRESHOLDS, MISSING_DATA_PENALTY_SCORE, isVariableSupported, CHECKWX_API_KEY } from '../constants';
 import type { Forecast, Observation, Verification, BucketName, ModelVariableStats, LeaderboardRow } from '../types';
-import * as db from './db';
+import db from '../db';
 
 type LogFn = (message: string) => void;
 
@@ -102,7 +102,7 @@ export async function fetchMETARHistory(): Promise<Observation[]> {
     log('[METAR] Fetching last 48 hours of observations...');
 
     // Clear old observations to remove stale synthetic records
-    await db.clearTable('observations');
+    db.prepare('DELETE FROM observations').run();
 
     let rawMetars: any[] = [];
     let source = '';
@@ -136,6 +136,7 @@ export async function fetchMETARHistory(): Promise<Observation[]> {
         {
             name: 'Layer 4: CORS Proxy -> AviationWeather',
             fn: async () => {
+                // Server-side doesn't need CORS proxy usually, but keeping logic if direct fails
                 const target = `https://aviationweather.gov/api/data/metar?ids=${LOCATION.name}&format=json&hours=48`;
                 const res = await fetchWithRetry(`https://corsproxy.io/?${encodeURIComponent(target)}`, 2, 1000);
                 if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
@@ -327,7 +328,20 @@ export async function fetchMETARHistory(): Promise<Observation[]> {
     }
 
     if (observations.length > 0) {
-        await db.bulkPut('observations', observations);
+        const insert = db.prepare(`
+            INSERT OR REPLACE INTO observations (obs_time, report_type, data)
+            VALUES (@obs_time, @report_type, @data)
+        `);
+        const transaction = db.transaction((obsList: Observation[]) => {
+            for (const obs of obsList) {
+                insert.run({
+                    obs_time: obs.obs_time,
+                    report_type: obs.report_type,
+                    data: JSON.stringify(obs)
+                });
+            }
+        });
+        transaction(observations);
         log(`[METAR] Stored ${observations.length} observations (Source: ${source})`);
         return observations;
     }
@@ -342,18 +356,11 @@ async function storeForecast(modelId: string, apiModel: string | undefined, data
         // 1. Try exact match
         let val = data.hourly[baseName]?.[index];
 
-        // DEBUG LOGGING FOR FIRST ITEM ONLY
-        if (index === 0 && baseName === 'temperature_2m') {
-            log(`[DEBUG-VAL] ${modelId} | base: ${baseName} | apiModel: ${apiModel}`);
-            log(`[DEBUG-VAL] exact match: ${val}`);
-        }
-
         if (val !== undefined && val !== null) return Number.isFinite(val) ? val : null;
 
         // 2. Try with apiModel suffix (e.g. temperature_2m_ecmwf_aifs025)
         if (apiModel) {
             val = data.hourly[`${baseName}_${apiModel}`]?.[index];
-            if (index === 0 && baseName === 'temperature_2m') log(`[DEBUG-VAL] suffixed (${baseName}_${apiModel}): ${val}`);
             if (val !== undefined && val !== null) return Number.isFinite(val) ? val : null;
         }
 
@@ -361,7 +368,6 @@ async function storeForecast(modelId: string, apiModel: string | undefined, data
         const matchingKey = Object.keys(data.hourly).find(k => k.startsWith(baseName + '_'));
         if (matchingKey) {
             val = data.hourly[matchingKey]?.[index];
-            if (index === 0 && baseName === 'temperature_2m') log(`[DEBUG-VAL] fuzzy match (${matchingKey}): ${val}`);
             if (val !== undefined && val !== null) return Number.isFinite(val) ? val : null;
         }
 
@@ -376,14 +382,9 @@ async function storeForecast(modelId: string, apiModel: string | undefined, data
 
         // STRICT FORECAST LOGIC:
         // We only store data where validTime >= issueTime.
-        // We DO NOT backfill past data as "forecasts" because that is analysis data (hindcast),
-        // not a true prediction made in the past.
         if (validTime < issueTime) {
             continue;
         }
-
-        // recordIssueTime is always the actual fetch time (rounded to hour)
-        // (No change needed, it was initialized to issueTime above)
 
         const temp = getVal('temperature_2m', i);
         if (temp === null) continue;
@@ -429,25 +430,27 @@ async function storeForecast(modelId: string, apiModel: string | undefined, data
         };
         forecasts.push(record);
     }
-    await db.bulkPut('forecasts', forecasts);
+
     if (forecasts.length > 0) {
+        const insert = db.prepare(`
+            INSERT OR REPLACE INTO forecasts (id, model_id, issue_time, valid_time, data)
+            VALUES (@id, @model_id, @issue_time, @valid_time, @data)
+        `);
+        const transaction = db.transaction((list: Forecast[]) => {
+            for (const f of list) {
+                insert.run({
+                    id: f.id,
+                    model_id: f.model_id,
+                    issue_time: f.issue_time,
+                    valid_time: f.valid_time,
+                    data: JSON.stringify(f)
+                });
+            }
+        });
+        transaction(forecasts);
         log(`[STORE] ${modelId}: Stored ${forecasts.length} forecast hours`);
     } else {
         log(`[STORE] ${modelId}: Warning - 0 hours stored. (Missing Temp?)`);
-
-        // DIAGNOSTIC: Check if ANY valid temp exists in the raw data
-        const rawTemps = data.hourly['temperature_2m'] || [];
-        const validCount = rawTemps.filter((v: any) => v !== null).length;
-        log(`[DEBUG] ${modelId}: Found ${validCount} valid temps out of ${rawTemps.length} total slots.`);
-
-        if (validCount === 0) {
-            // Check suffixed vars
-            const keys = Object.keys(data.hourly).filter(k => k.startsWith('temperature_2m_'));
-            keys.forEach(k => {
-                const count = (data.hourly[k] || []).filter((v: any) => v !== null).length;
-                log(`[DEBUG] ${modelId} (${k}): ${count} valid values`);
-            });
-        }
     }
 }
 
@@ -457,7 +460,12 @@ async function generateSyntheticModels(issueTime: number): Promise<void> {
     const startValid = issueTime - (48 * 3600 * 1000);
     const endValid = issueTime + (10 * 24 * 3600 * 1000);
 
-    const relevantForecasts: Forecast[] = await db.getAll('forecasts', 'by_valid_time', IDBKeyRange.bound(startValid, endValid));
+    const rows = db.prepare(`
+        SELECT data FROM forecasts 
+        WHERE valid_time BETWEEN ? AND ?
+    `).all(startValid, endValid) as { data: string }[];
+
+    const relevantForecasts: Forecast[] = rows.map(r => JSON.parse(r.data));
     const validTimeGroups: Record<number, Forecast[]> = {};
 
     relevantForecasts.forEach(f => {
@@ -527,8 +535,26 @@ async function generateSyntheticModels(issueTime: number): Promise<void> {
         }
         syntheticForecasts.push(avgRecord as Forecast, medRecord as Forecast);
     }
-    await db.bulkPut('forecasts', syntheticForecasts);
-    log(`[SYNTHETIC] Generated ${syntheticForecasts.length / 2} hours for Average and Median models`);
+
+    if (syntheticForecasts.length > 0) {
+        const insert = db.prepare(`
+            INSERT OR REPLACE INTO forecasts (id, model_id, issue_time, valid_time, data)
+            VALUES (@id, @model_id, @issue_time, @valid_time, @data)
+        `);
+        const transaction = db.transaction((list: Forecast[]) => {
+            for (const f of list) {
+                insert.run({
+                    id: f.id,
+                    model_id: f.model_id,
+                    issue_time: f.issue_time,
+                    valid_time: f.valid_time,
+                    data: JSON.stringify(f)
+                });
+            }
+        });
+        transaction(syntheticForecasts);
+        log(`[SYNTHETIC] Generated ${syntheticForecasts.length / 2} hours for Average and Median models`);
+    }
 }
 
 export async function fetchAllModels() {
@@ -536,13 +562,6 @@ export async function fetchAllModels() {
 
     log(`[FETCH] Starting model fetch. Anchor Time: ${new Date(commonIssueTime).toISOString()}`);
     const BATCH_SIZE = 4;
-
-    // Helper to determine fallback model ID
-    const getFallbackModel = (configId: string): string => {
-        if (configId.includes('gfs')) return 'gfs_seamless';
-        if (configId.includes('gem')) return 'gem_global';
-        return 'ecmwf_ifs04'; // Default stable fallback
-    };
 
     for (let i = 0; i < MODELS.length; i += BATCH_SIZE) {
         const batch = MODELS.slice(i, i + BATCH_SIZE);
@@ -636,7 +655,7 @@ export async function fetchAllModels() {
                     const url = buildUrl(layer.vars, layer.model);
                     const timeout = (layer as any).timeout || 1000;
 
-                    log(`[FETCH] ${config.id}: Trying ${layer.name}... (model=${layer.model || 'default'}, vars=${layer.vars.split(',').length} vars)`);
+                    log(`[FETCH] ${config.id}: Trying ${layer.name}... (model=${layer.model || 'default'}, vars=${layer.vars ? layer.vars.split(',').length : 0} vars)`);
 
                     const response = await fetchWithRetry(url, 1, timeout);
 
@@ -686,7 +705,7 @@ export async function fetchAllModels() {
 
             if (!success) {
                 log(`[FETCH] ${config.id}: ALL 5 LAYERS FAILED. Model Unavailable.`);
-                await db.setMetadata(`model_unavailable_${config.id}`, 'All layers failed');
+                db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run(`model_unavailable_${config.id}`, 'All layers failed');
             }
         });
 
@@ -697,14 +716,19 @@ export async function fetchAllModels() {
     }
 
     await generateSyntheticModels(commonIssueTime);
-    await db.setMetadata('last_forecast_fetch', commonIssueTime);
+    db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)').run('last_forecast_fetch', commonIssueTime.toString());
     log(`[FETCH] Complete.`);
 }
 
 export async function runVerification(): Promise<void> {
     log('[VERIFY] Starting verification process...');
-    const observations: Observation[] = await db.getAll('observations');
-    const allForecasts: Forecast[] = await db.getAll('forecasts');
+
+    const obsRows = db.prepare('SELECT data FROM observations').all() as { data: string }[];
+    const observations: Observation[] = obsRows.map(r => JSON.parse(r.data));
+
+    const fcstRows = db.prepare('SELECT data FROM forecasts').all() as { data: string }[];
+    const allForecasts: Forecast[] = fcstRows.map(r => JSON.parse(r.data));
+
     const forecastsByTime: Record<number, Forecast[]> = allForecasts.reduce((acc, f) => {
         acc[f.valid_time] = acc[f.valid_time] || [];
         acc[f.valid_time].push(f);
@@ -807,361 +831,55 @@ export async function runVerification(): Promise<void> {
                     continue;
                 }
 
-                // Standard Variables (Temp, Wind, etc)
-                // For Precip Amounts, we use ERA5 because METAR doesn't have it.
-                if (name === 'precipitation') obsVal = obs.era_precip_amt;
-                else if (name === 'rain') obsVal = obs.era_rain_amt;
-                else if (name === 'snowfall') obsVal = obs.era_snow_amt;
-                else if (name === 'wind_gusts_10m') obsVal = obs.wind_gust ?? obs.era_wind_gust; // Prefer METAR gust, fallback to ERA5
-                else obsVal = obs[obsKey as keyof Observation] as number | null;
+                // Standard Continuous Variables
+                if (obsKey === 'era_rain_amt') obsVal = obs.era_rain_amt;
+                else if (obsKey === 'era_snow_amt') obsVal = obs.era_snow_amt;
+                else if (obsKey === 'precip_1h') obsVal = obs.era_precip_amt ?? obs.precip_1h; // Prefer ERA5 precip amount if available? No, wait.
+                // Actually, for precipitation amount, we use ERA5 if METAR is missing it?
+                // The constant says: { name: 'precipitation', obsKey: 'precip_1h', threshold: 0.5 }
+                // And obs.precip_1h is from METAR.
+                // But we also have { name: 'rain', obsKey: 'era_rain_amt' }
 
-                // Strict checks against NaN / Null
-                if (obsVal === null || obsVal === undefined || !Number.isFinite(obsVal)) continue;
-                if (fcstVal === null || fcstVal === undefined || !Number.isFinite(fcstVal)) continue;
-
-                let error: number;
-                if (name === 'wind_direction_10m') {
-                    let diff = fcstVal - obsVal;
-                    while (diff <= -180) diff += 360;
-                    while (diff > 180) diff -= 360;
-                    error = diff;
-                } else {
-                    error = fcstVal - obsVal;
+                // Let's stick to the key mapping
+                if (obsVal === null) {
+                    obsVal = (obs as any)[obsKey];
                 }
 
-                verifications.push({
-                    key: `${forecast.model_id}_${name}_${forecast.valid_time}_${leadTime.toFixed(1)}`,
-                    model_id: forecast.model_id, variable: name, valid_time: forecast.valid_time,
-                    issue_time: forecast.issue_time, lead_time_hours: leadTime,
-                    forecast_value: fcstVal, observed_value: obsVal, error: error,
-                    absolute_error: Math.abs(error), squared_error: error * error,
-                    percentage_error: obsVal !== 0 ? Math.abs(error / obsVal) * 100 : null,
-                    bias: error
-                });
+                if (obsVal !== null && fcstVal !== null) {
+                    const error = fcstVal - obsVal;
+                    const absError = Math.abs(error);
+                    const sqError = error * error;
+                    const pctError = obsVal !== 0 ? (absError / Math.abs(obsVal)) * 100 : null;
+
+                    verifications.push({
+                        key: `${forecast.model_id}_${name}_${forecast.valid_time}_${leadTime.toFixed(1)}`,
+                        model_id: forecast.model_id, variable: name, valid_time: forecast.valid_time,
+                        issue_time: forecast.issue_time, lead_time_hours: leadTime,
+                        forecast_value: fcstVal, observed_value: obsVal,
+                        error: error, absolute_error: absError, squared_error: sqError,
+                        percentage_error: pctError, bias: error
+                    });
+                }
             }
         }
     }
-    await db.bulkPut('verification', verifications);
-    log(`[VERIFY] Created/updated ${verifications.length} verification records.`);
-}
 
-// ... existing exports ...
-export async function calculateModelVariableStats(bucketName: BucketName): Promise<ModelVariableStats[] | null> {
-    const [minHours, maxHours] = LEAD_TIME_BUCKETS[bucketName];
-    const records: Verification[] = await db.getAll('verification', 'by_lead_time', IDBKeyRange.bound(minHours, maxHours, false, true));
-
-    if (records.length === 0) return null;
-
-    const stats: Record<string, any> = {};
-
-    for (const rec of records) {
-        if (!Number.isFinite(rec.absolute_error)) continue;
-        if (rec.variable !== 'pressure_msl' && rec.variable !== 'visibility' && !rec.variable.includes('occurrence') && !rec.variable.includes('probability') && rec.absolute_error > 2000) continue;
-
-        const key = `${rec.model_id}::${rec.variable}`;
-        if (!stats[key]) {
-            stats[key] = {
-                model_id: rec.model_id, variable: rec.variable,
-                sum_ae: 0, sum_se: 0, sum_bias: 0,
-                count: 0, values_ae: []
-            };
-        }
-        stats[key].sum_ae += rec.absolute_error;
-        stats[key].sum_se += rec.squared_error;
-        stats[key].sum_bias += rec.bias;
-        stats[key].values_ae.push(rec.absolute_error);
-        stats[key].count++;
-    }
-
-    return Object.values(stats).map(s => {
-        const n = s.count;
-        if (n === 0) return null;
-
-        const mae = s.sum_ae / n;
-        const mse = s.sum_se / n;
-
-        const sumSqDiff = s.values_ae.reduce((acc: number, val: number) => acc + Math.pow(val - mae, 2), 0);
-        const stdDev = Math.sqrt(Math.max(0, sumSqDiff / n));
-        const stdError = stdDev / Math.sqrt(n);
-
-        return {
-            model_id: s.model_id, variable: s.variable, n: n,
-            mae: mae, mse: mse, rmse: Math.sqrt(Math.max(0, mse)), bias: s.sum_bias / n,
-            mape: null, correlation: null, index_of_agreement: null, skill_score: null,
-            std_error: Number.isFinite(stdError) ? stdError : null
-        };
-    }).filter((s): s is ModelVariableStats => s !== null);
-}
-
-export async function calculateCompositeStats(bucketName: BucketName): Promise<ModelVariableStats[] | null> {
-    const allStats = await calculateModelVariableStats(bucketName);
-    if (!allStats || allStats.length === 0) return null;
-
-    const allowedVars = new Set<string>(VERIFICATION_VARIABLES.map(v => v.name));
-    const validStats = allStats.filter(s => allowedVars.has(s.variable) && s.variable !== 'pressure_msl');
-
-    if (validStats.length === 0) return null;
-
-    const presentVariables = Array.from(new Set(validStats.map(s => s.variable)));
-    const presentModels = Array.from(new Set(validStats.map(s => s.model_id)));
-
-    const consensusMae: Record<string, number> = {};
-    presentVariables.forEach(variable => {
-        const statsForVar = validStats.filter(s => s.variable === variable);
-        if (statsForVar.length > 0) {
-            const sum = statsForVar.reduce((acc, val) => acc + val.mae, 0);
-            consensusMae[variable] = sum / statsForVar.length;
-        }
-    });
-
-    const scores: ModelVariableStats[] = presentModels.map(modelId => {
-        let sumScore = 0;
-        let varCount = 0;
-        let totalN = 0;
-
-        presentVariables.forEach(variable => {
-            const stat = validStats.find(s => s.model_id === modelId && s.variable === variable);
-            const baseline = consensusMae[variable];
-
-            if (baseline === undefined || !Number.isFinite(baseline)) return;
-
-            const threshold = MIN_MAE_THRESHOLDS[variable] || MIN_MAE_THRESHOLDS['default'];
-            const denom = Math.max(baseline, threshold);
-
-            if (stat) {
-                sumScore += (stat.mae / denom);
-                totalN += stat.n;
-                varCount++;
+    if (verifications.length > 0) {
+        const insert = db.prepare(`
+            INSERT OR REPLACE INTO verifications (
+                key, model_id, variable, valid_time, issue_time, lead_time_hours,
+                forecast_value, observed_value, error, absolute_error, squared_error, bias
+            ) VALUES (
+                @key, @model_id, @variable, @valid_time, @issue_time, @lead_time_hours,
+                @forecast_value, @observed_value, @error, @absolute_error, @squared_error, @bias
+            )
+        `);
+        const transaction = db.transaction((list: Verification[]) => {
+            for (const v of list) {
+                insert.run(v);
             }
-            // NO PENALTIES applied for missing data
         });
-
-        if (varCount === 0) {
-            return {
-                model_id: modelId, variable: 'overall_score', mae: NaN, n: 0,
-                mse: 0, rmse: 0, bias: 0, mape: null, correlation: null, index_of_agreement: null, skill_score: null, std_error: null
-            };
-        }
-
-        const finalScore = sumScore / varCount;
-        const avgN = Math.floor(totalN / varCount);
-
-        return {
-            model_id: modelId,
-            variable: 'overall_score',
-            mae: Number.isFinite(finalScore) ? finalScore : NaN,
-            n: avgN,
-            mse: 0, rmse: 0, bias: 0, mape: null, correlation: null, index_of_agreement: null, skill_score: null,
-            std_error: null
-        };
-    }).filter(s => Number.isFinite(s.mae));
-
-    return scores;
-}
-
-export async function getLeaderboardDataForBucket(bucketName: BucketName, variableFilter: string): Promise<LeaderboardRow[] | null> {
-    let data: ModelVariableStats[] | null;
-    if (variableFilter === 'overall_score') {
-        data = await calculateCompositeStats(bucketName);
-    } else {
-        data = await calculateModelVariableStats(bucketName);
+        transaction(verifications);
+        log(`[VERIFY] Stored ${verifications.length} verification records.`);
     }
-    if (!data) return null;
-
-    const filteredData = data.filter(d => (d.variable as string) === variableFilter && d.n > 0);
-
-    return filteredData.map(stats => ({
-        model: stats.model_id,
-        avg_mae: stats.mae,
-        avg_rmse: stats.rmse,
-        avg_mse: stats.mse,
-        avg_bias: stats.bias,
-        avg_corr: stats.correlation,
-        avg_skill: stats.skill_score,
-        std_error: stats.std_error,
-        total_verifications: stats.n
-    })).sort((a, b) => a.avg_mae - b.avg_mae);
 }
-
-export async function getLatestIssueTime(): Promise<number | null> {
-    const dbConn = await db.openDB();
-    return new Promise((resolve, reject) => {
-        const tx = dbConn.transaction('forecasts', 'readonly');
-        const store = tx.objectStore('forecasts');
-
-        if (!store.indexNames.contains('by_issue_time')) {
-            resolve(null);
-            return;
-        }
-
-        const index = store.index('by_issue_time');
-        const req = index.openCursor(null, 'prev');
-        req.onsuccess = () => {
-            const cursor = req.result;
-            if (cursor) {
-                resolve(cursor.value.issue_time);
-            } else {
-                resolve(null);
-            }
-        };
-        req.onerror = () => resolve(null);
-    });
-}
-
-export async function getLatestObservation(): Promise<Observation | null> {
-    const allObs = await db.getAll<Observation>('observations');
-    if (allObs.length === 0) return null;
-
-    // Sort by time descending
-    const sorted = allObs.sort((a, b) => b.obs_time - a.obs_time);
-
-    // Find the first observation that actually has data (temperature not null)
-    // This avoids showing the very latest "placeholder" hour if the ERA5/METAR hasn't populated it yet
-    const valid = sorted.find(o => o.temperature !== null);
-
-    return valid || sorted[0];
-}
-
-export async function cleanupOldData(): Promise<void> {
-    const cutoff = Date.now() - (14 * 24 * 3600 * 1000);
-    const count = await db.cleanupOldDataDB(cutoff);
-    log(`[CLEANUP] Removed ${count} old records`);
-}
-
-export async function exportVerificationDataCSV(): Promise<string> {
-    const records: Verification[] = await db.getAll('verification');
-    if (records.length === 0) return '';
-
-    const header = [
-        'Model', 'Variable', 'Issue Time (ISO)', 'Valid Time (ISO)', 'Lead Time (Hours)',
-        'Forecast Value', 'Observed Value', 'Error', 'Abs Error'
-    ].join(',');
-
-    const rows = records.map(r => {
-        return [
-            r.model_id,
-            r.variable,
-            new Date(r.issue_time).toISOString(),
-            new Date(r.valid_time).toISOString(),
-            r.lead_time_hours.toFixed(1),
-            r.forecast_value,
-            r.observed_value,
-            r.error.toFixed(4),
-            r.absolute_error.toFixed(4)
-        ].join(',');
-    });
-
-    return [header, ...rows].join('\n');
-}
-
-// --- DEEP ANALYSIS TEST SUITE ---
-export async function testVerificationLogic() {
-    log('--- STARTING DEEP VERIFICATION ANALYSIS ---');
-
-    // Mock Observation: Clear METAR, but ERA5 shows Rain
-    const obsClearEraRain: any = {
-        obs_time: 1000, report_type: 'METAR', temperature: 20, dewpoint: 10, wind_dir: 180, wind_speed: 10, wind_gust: null, visibility: 10000, pressure_msl: 1013,
-        raw_text: 'METAR CLR', ceiling_agl: null, precip_1h: 0,
-        weather_codes: [], // EMPTY (Clear)
-        era_precip_amt: 2.5, era_rain_amt: 2.5, era_snow_amt: 0, era_wind_gust: 20
-    };
-
-    // Mock Observation: Rain METAR, ERA5 0
-    const obsRainEraDry: any = {
-        obs_time: 2000, report_type: 'METAR', temperature: 20, dewpoint: 10, wind_dir: 180, wind_speed: 10, wind_gust: null, visibility: 5000, pressure_msl: 1013,
-        raw_text: 'METAR RA', ceiling_agl: null, precip_1h: null,
-        weather_codes: ['RA'], // RAIN
-        era_precip_amt: 0, era_rain_amt: 0, era_snow_amt: 0, era_wind_gust: 20
-    };
-
-    // Mock Forecast: Predicts Rain (100%)
-    const fcstRain: any = {
-        id: 'test_rain', model_id: 'test_model', issue_time: 0, valid_time: 1000,
-        temperature_2m: 20, dewpoint_2m: 10, wind_speed_10m: 10, wind_direction_10m: 180, wind_gusts_10m: 20,
-        precip_probability: 100, rain: 5, snowfall: 0, weather_code: 61,
-        surface_pressure: 1013, cloud_cover: 100, visibility: 5000
-    };
-
-    // Helper to simulate verification logic for a single pair
-    const verify = (obs: any, fcst: any, varName: string) => {
-        let o = 0;
-        let f = 0;
-
-        if (varName === 'precip_probability') {
-            const obsHasPrecip = (obs.weather_codes && obs.weather_codes.length > 0);
-            o = obsHasPrecip ? 1 : 0;
-            f = fcst.precip_probability / 100;
-        } else if (varName === 'rain_occurrence') {
-            o = (obs.weather_codes && obs.weather_codes.includes('RA')) ? 1 : 0;
-            f = 1; // Assuming forecast has rain
-        } else if (varName === 'precip_1h') {
-            o = obs.era_precip_amt || 0;
-            f = fcst.rain; // Simplified
-        } else if (varName === 'visibility') {
-            o = obs.visibility;
-            f = fcst.visibility;
-        }
-        return { o, f };
-    };
-
-    // TEST 1: METAR Clear, ERA5 Rain. Forecast Rain.
-    // Expectation: Precip Prob Observed = 0 (Miss). Rain Occ Observed = 0 (Miss). Precip Amt Observed = 2.5 (ERA5).
-    const t1_prob = verify(obsClearEraRain, fcstRain, 'precip_probability');
-    const t1_occ = verify(obsClearEraRain, fcstRain, 'rain_occurrence');
-    const t1_amt = verify(obsClearEraRain, fcstRain, 'precip_1h');
-
-    log(`[TEST 1] (METAR=CLR, ERA5=Rain): Prob_Obs=${t1_prob.o} (Exp: 0), Occ_Obs=${t1_occ.o} (Exp: 0), Amt_Obs=${t1_amt.o} (Exp: 2.5)`);
-    if (t1_prob.o !== 0 || t1_occ.o !== 0 || t1_amt.o !== 2.5) log('[TEST 1] FAILED');
-    else log('[TEST 1] PASSED');
-
-    // TEST 2: METAR Rain, ERA5 Dry. Forecast Rain.
-    // Expectation: Prob Obs = 1 (Hit). Occ Obs = 1 (Hit). Amt Obs = 0 (ERA5).
-    const t2_prob = verify(obsRainEraDry, fcstRain, 'precip_probability');
-    const t2_occ = verify(obsRainEraDry, fcstRain, 'rain_occurrence');
-    const t2_amt = verify(obsRainEraDry, fcstRain, 'precip_1h');
-
-    log(`[TEST 2] (METAR=RA, ERA5=Dry): Prob_Obs=${t2_prob.o} (Exp: 1), Occ_Obs=${t2_occ.o} (Exp: 1), Amt_Obs=${t2_amt.o} (Exp: 0)`);
-    if (t2_prob.o !== 1 || t2_occ.o !== 1 || t2_amt.o !== 0) log('[TEST 2] FAILED');
-    else log('[TEST 2] PASSED');
-
-    // TEST 3: Visibility
-    // Forecast: 5000m. Obs: 10000m. Error: -5000.
-    const t3_vis = verify(obsClearEraRain, fcstRain, 'visibility');
-    log(`[TEST 3] (Visibility): Fcst=${t3_vis.f}, Obs=${t3_vis.o}. Error=${t3_vis.f - t3_vis.o} (Exp: -5000)`);
-    if (t3_vis.f !== 5000 || t3_vis.o !== 10000) log('[TEST 3] FAILED');
-    else log('[TEST 3] PASSED');
-
-    // TEST 4: Mixed Precip (RASN)
-    // Obs: "METAR RASN". Expect: Rain=1, Snow=1.
-    const obsMixed: any = { ...obsClearEraRain, weather_codes: ['RA', 'SN'], raw_text: 'METAR RASN' };
-    const t4_rain = verify(obsMixed, fcstRain, 'rain_occurrence');
-    const t4_snow = verify(obsMixed, fcstRain, 'snow_occurrence'); // Need to update helper for snow
-
-    // Update helper for snow first (in memory simulation for this test block)
-    const verifySnow = (obs: any) => (obs.weather_codes && obs.weather_codes.includes('SN')) ? 1 : 0;
-
-    log(`[TEST 4] (METAR=RASN): Rain_Obs=${t4_rain.o} (Exp: 1), Snow_Obs=${verifySnow(obsMixed)} (Exp: 1)`);
-    if (t4_rain.o !== 1 || verifySnow(obsMixed) !== 1) log('[TEST 4] FAILED');
-    else log('[TEST 4] PASSED');
-
-    // TEST 5: False Alarm (Freezing Rain)
-    // Forecast: FZRA (Code 66). Obs: Clear. Expect: Error=1 (Penalty).
-    const fcstFzra: any = { ...fcstRain, weather_code: 66, rain: 0, snowfall: 0 }; // Code 66 = FZRA
-    const obsClear: any = { ...obsClearEraRain, weather_codes: [] };
-
-    // Helper update for FZRA
-    const verifyFzra = (obs: any, fcst: any) => {
-        const fHas = [56, 57, 66, 67].includes(fcst.weather_code);
-        const p = fHas ? 1 : 0;
-        const o = (obs.weather_codes && obs.weather_codes.includes('FZRA')) ? 1 : 0;
-        return { p, o, error: Math.abs(p - o) };
-    };
-
-    const t5 = verifyFzra(obsClear, fcstFzra);
-    log(`[TEST 5] (False Alarm FZRA): Fcst=${t5.p}, Obs=${t5.o}. Error=${t5.error} (Exp: 1)`);
-    if (t5.error !== 1) log('[TEST 5] FAILED');
-    else log('[TEST 5] PASSED');
-
-    log('--- END ANALYSIS ---');
-}
-

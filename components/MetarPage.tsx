@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { fetchTAF } from '../services/weatherService';
-import * as db from '../services/db';
+import { apiClient } from '../services/apiClient';
 import type { Observation } from '../types';
 import { ArrowLeft, Wind, Droplets, Eye, Thermometer } from 'lucide-react';
 
@@ -15,14 +14,18 @@ const MetarPage: React.FC<MetarPageProps> = ({ onBack }) => {
 
     useEffect(() => {
         const loadData = async () => {
-            const obs = await db.getAll<Observation>('observations');
-            // Sort descending by time
-            const sorted = obs.sort((a, b) => b.obs_time - a.obs_time);
-            setObservations(sorted);
-
-            const tafText = await fetchTAF();
-            setTaf(tafText);
-            setLoading(false);
+            try {
+                const [obs, tafText] = await Promise.all([
+                    apiClient.getHistory(48),
+                    apiClient.getTAF()
+                ]);
+                setObservations(obs);
+                setTaf(tafText);
+            } catch (e) {
+                console.error('Failed to load METAR/TAF data:', e);
+            } finally {
+                setLoading(false);
+            }
         };
         loadData();
     }, []);

@@ -7,7 +7,7 @@ import { CalendarDays, Thermometer, Wind, Eye, Gauge, CloudRain, Activity, Navig
 
 const SHORT_LABELS: Record<string, string> = {
     'overall_score': 'Overall Score',
-    'temperature_2m': 'Temp',
+    'temperature_2m': 'Temperature',
     'dew_point_2m': 'Dew Point',
     'pressure_msl': 'Pressure',
     'visibility': 'Visibility',
@@ -19,11 +19,11 @@ const SHORT_LABELS: Record<string, string> = {
     'precipitation': 'Total Precip',
     'rain_amount': 'Rainfall',
     'snow_amount': 'Snowfall',
-    'freezing_rain_amount': 'Ice Accumulation',
+    'freezing_rain_amount': 'Freezing Rain',
     'precip_probability': 'Precip Probability Score',
     'rain_occurrence': 'Rain Detection',
     'snow_occurrence': 'Snow Detection',
-    'freezing_rain_occurrence': 'Ice Detection'
+    'freezing_rain_occurrence': 'Freezing Rain Detection'
 };
 
 const VARIABLE_GROUPS = [
@@ -48,7 +48,7 @@ const VARIABLE_GROUPS = [
         vars: ['precipitation', 'rain_amount', 'snow_amount', 'freezing_rain_amount']
     },
     {
-        title: 'SKILL SCORES (QUALITY)',
+        title: 'SKILL (BRIER SCORE)',
         vars: ['precip_probability', 'rain_occurrence', 'snow_occurrence', 'freezing_rain_occurrence']
     }
 ];
@@ -96,8 +96,8 @@ const Dashboard: React.FC = () => {
                                 key={bucket}
                                 onClick={() => setActiveTab(bucket)}
                                 className={`relative px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 whitespace-nowrap focus:outline-none border group ${activeTab === bucket
-                                        ? 'bg-slate-800 border-cyan-500/50 text-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.15)]'
-                                        : 'bg-slate-950/50 border-white/5 text-slate-400 hover:border-white/20 hover:text-slate-200 hover:bg-white/5'
+                                    ? 'bg-slate-800 border-cyan-500/50 text-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.15)]'
+                                    : 'bg-slate-950/50 border-white/5 text-slate-400 hover:border-white/20 hover:text-slate-200 hover:bg-white/5'
                                     }`}
                             >
                                 {activeTab === bucket && (

@@ -56,15 +56,7 @@ const App: React.FC = () => {
 
           <div className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-3">
-              <button
-                onClick={async () => {
-                  const { testVerificationLogic } = await import('./services/weatherService');
-                  testVerificationLogic();
-                }}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/10 text-[10px] font-mono font-bold uppercase tracking-widest bg-slate-900/80 text-purple-400 hover:text-white hover:bg-white/5 transition-all active:scale-95"
-              >
-                TEST VERIFY
-              </button>
+
 
               <button
                 onClick={refresh}

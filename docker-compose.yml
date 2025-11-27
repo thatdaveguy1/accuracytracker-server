@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  accuracytracker:
+    image: gcr.io/accuracytracker-server/weather-tracker:latest
+    container_name: accuracytracker
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PORT=80
+      - NODE_ENV=production
+
+  boreas:
+    image: gcr.io/accuracytracker-server/boreas:latest
+    container_name: boreas
+    restart: always
+    ports:
+      - "8080:80"

@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { Observation } from '../types';
-import { getLatestObservation } from '../services/weatherService';
+import { apiClient } from '../services/apiClient';
 import { Wind, Thermometer, Eye, ArrowUp, Cloud, Zap, Gauge, Navigation, Droplets } from 'lucide-react';
 
 const CurrentConditions: React.FC = () => {
     const [obs, setObs] = useState<Observation | null>(null);
 
     useEffect(() => {
-        getLatestObservation().then(setObs);
+        apiClient.getLatestObservation()
+            .then(setObs)
+            .catch(err => console.error('Failed to fetch current conditions:', err));
     }, []);
 
     if (!obs) return null;
@@ -114,7 +116,7 @@ const CurrentConditions: React.FC = () => {
                     <MetricCard
                         icon={Eye}
                         label="Visibility"
-                        value={`${obs.visibility ? (obs.visibility / 1609.34).toFixed(1) : '--'} SM`}
+                        value={`${obs.visibility !== null ? (obs.visibility / 1609.34).toFixed(1) : '--'} SM`}
                         colorClass="text-emerald-400"
                     />
 
