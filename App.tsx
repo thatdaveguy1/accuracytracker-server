@@ -6,8 +6,10 @@ import CurrentConditions from './components/CurrentConditions';
 import MetarPage from './components/MetarPage';
 import { Loader2, Terminal, Activity, Clock, Radio, Plane } from 'lucide-react';
 
+const IconLoader = () => <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />;
+
 const App: React.FC = () => {
-  const { status, lastUpdated, logs, isInitialized, refresh } = useWeatherTracker();
+  const { status, lastUpdated, logs, isInitialized } = useWeatherTracker();
   const [showLogs, setShowLogs] = useState(false);
   const [currentView, setCurrentView] = useState<'dashboard' | 'metar'>('dashboard');
   const logsContainerRef = useRef<HTMLDivElement>(null);
@@ -26,8 +28,6 @@ const App: React.FC = () => {
       logsContainerRef.current.scrollTop = scrollHeight;
     }
   }, [logs, showLogs]);
-
-  const IconLoader = () => <Loader2 className="h-4 w-4 animate-spin text-cyan-400" />;
 
   // Status Indicator Logic
   const getStatusColor = () => {
@@ -58,13 +58,7 @@ const App: React.FC = () => {
             <div className="flex items-center gap-3">
 
 
-              <button
-                onClick={refresh}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/10 text-[10px] font-mono font-bold uppercase tracking-widest bg-slate-900/80 text-slate-400 hover:text-white hover:bg-white/5 transition-all active:scale-95"
-              >
-                <Loader2 className={`h-3 w-3 ${status !== 'Idle' ? 'animate-spin' : ''}`} />
-                FORCE UPDATE
-              </button>
+
 
               <button
                 onClick={() => setCurrentView('metar')}

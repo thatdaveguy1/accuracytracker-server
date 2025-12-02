@@ -12,6 +12,9 @@ interface TabContentProps {
   selectedVariable: string;
 }
 
+const IconLoader = () => <Loader2 className="h-12 w-12 animate-spin text-cyan-500" />;
+const IconError = () => <AlertTriangle className="h-12 w-12 text-red-400" />;
+
 const TabContent: React.FC<TabContentProps> = ({ bucketName, selectedVariable }) => {
   const [leaderboardData, setLeaderboardData] = useState<LeaderboardRow[] | null>(null);
   const [chartData, setChartData] = useState<ModelVariableStats[] | null>(null);
@@ -73,9 +76,6 @@ const TabContent: React.FC<TabContentProps> = ({ bucketName, selectedVariable })
     // TODO: Implement server-side export or client-side CSV generation from current data
     alert("Export functionality to be restored via server API.");
   };
-
-  const IconLoader = () => <Loader2 className="h-12 w-12 animate-spin text-cyan-500" />;
-  const IconError = () => <AlertTriangle className="h-12 w-12 text-red-400" />;
 
   if (isLoading) {
     return (

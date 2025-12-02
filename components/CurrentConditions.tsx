@@ -3,6 +3,19 @@ import { Observation } from '../types';
 import { apiClient } from '../services/apiClient';
 import { Wind, Thermometer, Eye, ArrowUp, Cloud, Zap, Gauge, Navigation, Droplets } from 'lucide-react';
 
+// Helper for metric cards
+const MetricCard = ({ icon: Icon, label, value, sub, colorClass = "text-slate-200" }: any) => (
+    <div className="bg-slate-950/50 border border-white/5 rounded-xl p-4 flex flex-col gap-1 hover:bg-white/5 transition-colors group">
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-slate-500 font-medium mb-1">
+            <Icon className="w-3 h-3" /> {label}
+        </div>
+        <div className={`text-lg font-mono font-medium ${colorClass}`}>
+            {value}
+        </div>
+        {sub && <div className="text-xs text-slate-500 font-mono">{sub}</div>}
+    </div>
+);
+
 const CurrentConditions: React.FC = () => {
     const [obs, setObs] = useState<Observation | null>(null);
 
@@ -29,19 +42,6 @@ const CurrentConditions: React.FC = () => {
     };
 
     const flightCat = getFlightCategory(obs.visibility, obs.ceiling_agl);
-
-    // Helper for metric cards
-    const MetricCard = ({ icon: Icon, label, value, sub, colorClass = "text-slate-200" }: any) => (
-        <div className="bg-slate-950/50 border border-white/5 rounded-xl p-4 flex flex-col gap-1 hover:bg-white/5 transition-colors group">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-slate-500 font-medium mb-1">
-                <Icon className="w-3 h-3" /> {label}
-            </div>
-            <div className={`text-lg font-mono font-medium ${colorClass}`}>
-                {value}
-            </div>
-            {sub && <div className="text-xs text-slate-500 font-mono">{sub}</div>}
-        </div>
-    );
 
     return (
         <div className="relative overflow-hidden rounded-3xl bg-slate-900 border border-white/10 shadow-2xl p-0 mb-8 group">
