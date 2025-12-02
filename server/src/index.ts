@@ -152,6 +152,11 @@ cron.schedule('5 * * * *', () => {
     runUpdateCycle();
 });
 
+// NEW: Run daily pruning at 02:00 AM
+cron.schedule('0 2 * * *', () => {
+    statsService.pruneOldData();
+});
+
 // --- Admin Routes ---
 
 app.post('/api/admin/backfill', (req, res) => {

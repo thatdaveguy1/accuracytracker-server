@@ -212,6 +212,25 @@ export async function backfillStats() {
     console.log('[BACKFILL] Complete.');
 }
 
+// NEW: Prune raw data older than 7 days to keep DB size small
+export function pruneOldData() {
+    console.log('[PRUNE] Starting daily pruning...');
+    try {
+        const cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const cutoffTs = new Date(cutoffDate).getTime();
+
+        const result = db.prepare('DELETE FROM verifications WHERE valid_time < ?').run(cutoffTs);
+        console.log(`[PRUNE] Deleted ${result.changes} old verification records.`);
+
+        // VACUUM to reclaim space (Optional, but good for keeping size down)
+        // Note: VACUUM can be slow and blocking, maybe run it less frequently or rely on auto_vacuum
+        db.exec('VACUUM');
+        console.log('[PRUNE] Database vacuumed.');
+    } catch (e) {
+        console.error('[PRUNE] Failed:', e);
+    }
+}
+
 // NEW: Fast Leaderboard from Pre-aggregated Stats
 function calculateLeaderboardFast(bucket: BucketName = '24h', variable: string = 'overall_score'): LeaderboardRow[] {
     const label = `[PERF] calculateLeaderboardFast(${bucket}, ${variable})`;
