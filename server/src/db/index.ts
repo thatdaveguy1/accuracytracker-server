@@ -42,10 +42,19 @@ export const initDB = () => {
         );
         CREATE INDEX IF NOT EXISTS idx_verifications_model_var ON verifications(model_id, variable);
         CREATE INDEX IF NOT EXISTS idx_verifications_valid_time ON verifications(valid_time);
+        CREATE INDEX IF NOT EXISTS idx_verifications_lead_time ON verifications(lead_time_hours, variable);
         
         CREATE TABLE IF NOT EXISTS metadata (
             key TEXT PRIMARY KEY,
             value TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS leaderboard_cache (
+            bucket TEXT,
+            variable TEXT,
+            data TEXT,
+            updated_at INTEGER,
+            PRIMARY KEY (bucket, variable)
         );
     `);
     console.log('[DB] Initialized SQLite database');
