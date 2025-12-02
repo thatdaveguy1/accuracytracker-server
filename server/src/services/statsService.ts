@@ -120,7 +120,7 @@ function calculateLeaderboardFromRaw(bucket: BucketName = '24h', variable: strin
 }
 
 // NEW: Aggregate stats for a single day (Chunked Processing)
-export function aggregateDailyStats(dateStr: string) {
+export async function aggregateDailyStats(dateStr: string) {
     const label = `[AGG] Processing ${dateStr}`;
     console.time(label);
 
@@ -129,6 +129,9 @@ export function aggregateDailyStats(dateStr: string) {
 
     // Iterate through all buckets
     for (const bucket of ALL_BUCKETS) {
+        // Yield to event loop to prevent blocking
+        await new Promise(resolve => setImmediate(resolve));
+
         const [minHour, maxHour] = LEAD_TIME_BUCKETS[bucket];
 
         // Aggregate raw verifications for this day & bucket
@@ -196,7 +199,7 @@ export async function backfillStats() {
         if (!day) continue;
 
         try {
-            aggregateDailyStats(day);
+            await aggregateDailyStats(day);
             console.log(`[BACKFILL] Processed ${day}`);
         } catch (e) {
             console.error(`[BACKFILL] Failed to process ${day}:`, e);

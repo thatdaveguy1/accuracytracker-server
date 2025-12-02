@@ -133,8 +133,8 @@ async function runUpdateCycle() {
         // NEW: Aggregate stats for today (and yesterday to be safe)
         const today = new Date().toISOString().split('T')[0];
         const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-        statsService.aggregateDailyStats(yesterday);
-        statsService.aggregateDailyStats(today);
+        await statsService.aggregateDailyStats(yesterday);
+        await statsService.aggregateDailyStats(today);
 
         statsService.refreshLeaderboardCache();
         console.log('[UPDATE] Cycle complete.');
