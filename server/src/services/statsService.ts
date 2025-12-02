@@ -165,32 +165,45 @@ export function aggregateDailyStats(dateStr: string) {
     console.timeEnd(label);
 }
 
-// NEW: Backfill all history (Chunked by day)
+// NEW: Backfill all history (Chunked by day, Resume-able, Gentle)
 export async function backfillStats() {
-    console.log('[BACKFILL] Checking if backfill is needed...');
-    const count = db.prepare('SELECT COUNT(*) as c FROM leaderboard_daily_stats').get() as { c: number };
-
-    if (count.c > 0) {
-        console.log('[BACKFILL] Stats already exist. Skipping full backfill.');
-        return;
-    }
-
-    console.log('[BACKFILL] Starting full backfill...');
+    console.log('[BACKFILL] Checking for missing daily stats...');
 
     // Get all distinct days from verifications
-    const days = db.prepare(`
+    const allDays = db.prepare(`
         SELECT DISTINCT date(datetime(valid_time / 1000, 'unixepoch')) as day 
         FROM verifications 
         ORDER BY day DESC
     `).all() as { day: string }[];
 
-    console.log(`[BACKFILL] Found ${days.length} days to process.`);
+    // Get days already in stats
+    const existingDays = new Set(
+        (db.prepare('SELECT DISTINCT date FROM leaderboard_daily_stats').all() as { date: string }[]).map(r => r.date)
+    );
 
-    for (const { day } of days) {
+    const missingDays = allDays.filter(d => d.day && !existingDays.has(d.day));
+
+    console.log(`[BACKFILL] Found ${allDays.length} total days, ${missingDays.length} missing.`);
+
+    if (missingDays.length === 0) {
+        console.log('[BACKFILL] Up to date.');
+        return;
+    }
+
+    console.log('[BACKFILL] Starting backfill for missing days...');
+
+    for (const { day } of missingDays) {
         if (!day) continue;
-        aggregateDailyStats(day);
-        // Yield to event loop to prevent blocking
-        await new Promise(resolve => setImmediate(resolve));
+
+        try {
+            aggregateDailyStats(day);
+            console.log(`[BACKFILL] Processed ${day}`);
+        } catch (e) {
+            console.error(`[BACKFILL] Failed to process ${day}:`, e);
+        }
+
+        // SLEEP to protect CPU/IO
+        await new Promise(resolve => setTimeout(resolve, 500));
     }
 
     console.log('[BACKFILL] Complete.');

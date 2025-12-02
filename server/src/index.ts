@@ -152,14 +152,17 @@ cron.schedule('5 * * * *', () => {
     runUpdateCycle();
 });
 
+// --- Admin Routes ---
+
+app.post('/api/admin/backfill', (req, res) => {
+    console.log('[ADMIN] Triggering backfill...');
+    statsService.backfillStats().catch(err => console.error('[BACKFILL] Failed:', err));
+    res.json({ message: 'Backfill started in background' });
+});
+
 // Start Server
 app.listen(PORT, () => {
     console.log(`[SERVER] Running on http://localhost:${PORT}`);
-
-    // NEW: Run backfill on startup (Non-blocking)
-    setTimeout(() => {
-        statsService.backfillStats().catch(err => console.error('[BACKFILL] Failed:', err));
-    }, 5000);
 });
 
 // Catch-all for SPA (must be last)
