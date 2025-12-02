@@ -56,6 +56,19 @@ export const initDB = () => {
             updated_at INTEGER,
             PRIMARY KEY (bucket, variable)
         );
+
+        CREATE TABLE IF NOT EXISTS leaderboard_daily_stats (
+            date TEXT,
+            model_id TEXT,
+            variable TEXT,
+            lead_time_bucket TEXT,
+            mae_sum REAL,
+            mse_sum REAL,
+            bias_sum REAL,
+            count INTEGER,
+            PRIMARY KEY (date, model_id, variable, lead_time_bucket)
+        );
+        CREATE INDEX IF NOT EXISTS idx_daily_stats_lookup ON leaderboard_daily_stats(lead_time_bucket, variable);
     `);
     console.log('[DB] Initialized SQLite database');
 };

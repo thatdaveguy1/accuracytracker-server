@@ -99,6 +99,20 @@ app.post('/api/trigger-update', async (req, res) => {
     }
 });
 
+app.post('/api/reset', (req, res) => {
+    try {
+        console.log('[MANUAL] Resetting database...');
+        db.exec('DELETE FROM forecasts');
+        db.exec('DELETE FROM observations');
+        db.exec('DELETE FROM verifications');
+        db.exec('DELETE FROM metadata');
+        console.log('[MANUAL] Database cleared.');
+        res.json({ message: 'Database reset successfully' });
+    } catch (e) {
+        res.status(500).json({ error: String(e) });
+    }
+});
+
 // --- Update Cycle ---
 
 let isUpdating = false;
@@ -114,6 +128,15 @@ async function runUpdateCycle() {
         await weatherService.fetchMETARHistory();
         await weatherService.fetchAllModels();
         await weatherService.runVerification();
+        await weatherService.runVerification();
+
+        // NEW: Aggregate stats for today (and yesterday to be safe)
+        const today = new Date().toISOString().split('T')[0];
+        const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+        statsService.aggregateDailyStats(yesterday);
+        statsService.aggregateDailyStats(today);
+
+        statsService.refreshLeaderboardCache();
         console.log('[UPDATE] Cycle complete.');
     } catch (e) {
         console.error('[UPDATE] Cycle failed:', e);
@@ -132,6 +155,11 @@ cron.schedule('5 * * * *', () => {
 // Start Server
 app.listen(PORT, () => {
     console.log(`[SERVER] Running on http://localhost:${PORT}`);
+
+    // NEW: Run backfill on startup (Non-blocking)
+    setTimeout(() => {
+        statsService.backfillStats().catch(err => console.error('[BACKFILL] Failed:', err));
+    }, 5000);
 });
 
 // Catch-all for SPA (must be last)

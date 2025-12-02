@@ -25,15 +25,17 @@ const TabContent: React.FC<TabContentProps> = ({ bucketName, selectedVariable })
 
   useEffect(() => {
     const requestId = ++requestRef.current;
+    const controller = new AbortController();
 
     const fetchData = async () => {
       setIsLoading(true);
       setError(null);
 
       try {
+        // Pass signal to apiClient (requires apiClient update, but for now we just ignore result if aborted)
         const leaderboard = await apiClient.getLeaderboard(bucketName, selectedVariable);
 
-        if (requestId === requestRef.current) {
+        if (requestId === requestRef.current && !controller.signal.aborted) {
           setLeaderboardData(leaderboard);
 
           // Map leaderboard rows to chart data format
@@ -54,13 +56,13 @@ const TabContent: React.FC<TabContentProps> = ({ bucketName, selectedVariable })
           setChartData(mappedChartData);
         }
       } catch (e) {
-        if (requestId === requestRef.current) {
+        if (requestId === requestRef.current && !controller.signal.aborted) {
           const errorMessage = e instanceof Error ? e.message : 'An unknown error occurred.';
           console.error(`Failed to fetch data for tab ${bucketName}:`, e);
           setError(`Failed to load data. ${errorMessage}`);
         }
       } finally {
-        if (requestId === requestRef.current) {
+        if (requestId === requestRef.current && !controller.signal.aborted) {
           setIsLoading(false);
         }
       }
@@ -69,6 +71,7 @@ const TabContent: React.FC<TabContentProps> = ({ bucketName, selectedVariable })
     fetchData();
 
     return () => {
+      controller.abort();
     };
   }, [bucketName, selectedVariable]);
 
