@@ -30,6 +30,9 @@ export const FULL_VARS = `${BASE_VARS},visibility,precipitation_probability,clou
 // Excludes variables often missing (Visibility, Ceiling, CAPE)
 export const LIMITED_VARS = 'temperature_2m,dew_point_2m,wind_speed_10m,wind_direction_10m,wind_gusts_10m,pressure_msl,precipitation,cloud_cover';
 
+// 3b. Ensemble Suite: Limited + Probability
+export const ENSEMBLE_VARS = `${LIMITED_VARS},precipitation_probability`;
+
 // 4. GraphCast Specific: Strictly limited to supported variables to avoid 400/Nulls
 export const GRAPHCAST_VARS = 'temperature_2m,pressure_msl,cloud_cover,precipitation,wind_speed_10m,wind_direction_10m';
 
@@ -77,12 +80,12 @@ export const MODELS: ModelConfig[] = [
     { id: 'gfs-025', provider: 'gfs', apiModel: 'gfs_seamless', days: 16, label: 'GFS 0.25°', vars: FULL_VARS },
 
     // --- Ensemble Models ---
-    { id: 'gem-ensemble', provider: 'ensemble', apiModel: 'gem_global', days: 10, label: 'GDPS 0.25° Ensemble', vars: LIMITED_VARS },
-    { id: 'icon-ensemble', provider: 'ensemble', apiModel: 'icon_seamless', days: 7, label: 'ICON-EPS', vars: LIMITED_VARS },
-    { id: 'ecmwf-ensemble', provider: 'ensemble', apiModel: 'ecmwf_ifs025', days: 15, label: 'IFS 0.25° Ensemble', vars: LIMITED_VARS },
-    { id: 'aifs-ensemble', provider: 'ensemble', apiModel: 'ecmwf_aifs025', days: 15, label: 'AIFS 0.25° Ensemble', vars: LIMITED_VARS },
-    { id: 'gfs-ensemble', provider: 'ensemble', apiModel: 'gfs_seamless', days: 16, label: 'GFS Ensemble', vars: LIMITED_VARS },
-    { id: 'gfs05-ensemble', provider: 'ensemble', apiModel: 'gfs05', days: 16, label: 'GFS 0.5° Ensemble', vars: LIMITED_VARS },
+    { id: 'gem-ensemble', provider: 'ensemble', apiModel: 'gem_global', days: 10, label: 'GDPS 0.25° Ensemble', vars: ENSEMBLE_VARS },
+    { id: 'icon-ensemble', provider: 'ensemble', apiModel: 'icon_seamless', days: 7, label: 'ICON-EPS', vars: ENSEMBLE_VARS },
+    { id: 'ecmwf-ensemble', provider: 'ensemble', apiModel: 'ecmwf_ifs025', days: 15, label: 'IFS 0.25° Ensemble', vars: ENSEMBLE_VARS },
+    { id: 'aifs-ensemble', provider: 'ensemble', apiModel: 'ecmwf_aifs025', days: 15, label: 'AIFS 0.25° Ensemble', vars: ENSEMBLE_VARS },
+    { id: 'gfs-ensemble', provider: 'ensemble', apiModel: 'gfs_seamless', days: 16, label: 'GFS Ensemble', vars: ENSEMBLE_VARS },
+    { id: 'gfs05-ensemble', provider: 'ensemble', apiModel: 'gfs05', days: 16, label: 'GFS 0.5° Ensemble', vars: ENSEMBLE_VARS },
 ];
 
 // Helper to check if a model supports a specific variable
@@ -120,7 +123,6 @@ export const VERIFICATION_VARIABLES = [
     { name: 'cloud_base_agl', obsKey: 'ceiling_agl', threshold: 300 },
     { name: 'precipitation', obsKey: 'precip_1h', threshold: 0.5 },
 
-    { name: 'wind_vector', obsKey: 'wind_vector', threshold: 5 },
     { name: 'precipitation_probability', obsKey: 'precip_probability', threshold: 0.2 },
     { name: 'rain_occurrence', obsKey: 'rain_occurrence', threshold: 0.5 },
     { name: 'snow_occurrence', obsKey: 'snow_occurrence', threshold: 0.5 },
@@ -178,7 +180,6 @@ export const VARIABLE_LABELS: Record<string, string> = {
     'visibility': 'Visibility (m)',
     'cloud_base_agl': 'Ceiling Height (m)',
     'precipitation': 'Precipitation (mm)',
-    'wind_vector': 'Wind Vector Error',
     'precipitation_probability': 'Precip Probability (Brier)',
     'rain_occurrence': 'Rain Occurrence',
     'snow_occurrence': 'Snow Occurrence',
