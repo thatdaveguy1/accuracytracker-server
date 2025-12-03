@@ -757,11 +757,14 @@ export async function runVerification(): Promise<void> {
         return;
     }
 
-    const CHUNK_SIZE = 6 * 3600 * 1000; // 6 Hours
+    const CHUNK_SIZE = 2 * 3600 * 1000; // Reduce to 2 Hours to save memory
     let totalVerified = 0;
 
     // 2. Iterate in Chunks
     for (let currentStart = range.minTime; currentStart <= range.maxTime; currentStart += CHUNK_SIZE) {
+        // Yield to event loop
+        await new Promise(resolve => setImmediate(resolve));
+
         const currentEnd = currentStart + CHUNK_SIZE;
 
         // Scope block for GC
