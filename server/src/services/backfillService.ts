@@ -26,6 +26,13 @@ const fetchWithRetry = async (url: string, retries = 3, delay = 1000): Promise<R
 };
 
 export async function backfillProbabilities() {
+    // Check if already done
+    const meta = db.prepare("SELECT value FROM metadata WHERE key = 'backfill_prob_complete'").get() as { value: string } | undefined;
+    if (meta) {
+        log('Backfill already completed. Skipping.');
+        return;
+    }
+
     log('Starting precipitation_probability backfill...');
 
     const now = Date.now();
@@ -205,5 +212,7 @@ export async function backfillProbabilities() {
             log(`Error backfilling ${config.id}: ${e}`);
         }
     }
+
+    db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES ('backfill_prob_complete', 'true')").run();
     log('Backfill complete.');
 }
