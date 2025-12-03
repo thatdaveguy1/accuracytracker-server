@@ -457,104 +457,130 @@ async function storeForecast(modelId: string, apiModel: string | undefined, data
 async function generateSyntheticModels(issueTime: number): Promise<void> {
     log(`[SYNTHETIC] Generating Average/Median for issue time ${new Date(issueTime).toISOString()}...`);
 
-    const startValid = issueTime - (48 * 3600 * 1000);
+    // Look back 10 days and forward 10 days
+    const startValid = issueTime - (10 * 24 * 3600 * 1000);
     const endValid = issueTime + (10 * 24 * 3600 * 1000);
+    const CHUNK_SIZE = 2 * 3600 * 1000; // Reduce to 2 hours to save memory
 
-    const rows = db.prepare(`
-        SELECT data FROM forecasts 
-        WHERE valid_time BETWEEN ? AND ?
-    `).all(startValid, endValid) as { data: string }[];
+    let totalGenerated = 0;
 
-    const relevantForecasts: Forecast[] = rows.map(r => JSON.parse(r.data));
-    const validTimeGroups: Record<number, Forecast[]> = {};
+    for (let currentStart = startValid; currentStart < endValid; currentStart += CHUNK_SIZE) {
+        // Yield to event loop to prevent blocking and allow GC
+        await new Promise(resolve => setImmediate(resolve));
 
-    relevantForecasts.forEach(f => {
-        if (f.model_id.includes('_of_models')) return;
-        if (!validTimeGroups[f.valid_time]) validTimeGroups[f.valid_time] = [];
-        validTimeGroups[f.valid_time].push(f);
-    });
+        const currentEnd = currentStart + CHUNK_SIZE;
 
-    const syntheticForecasts: Forecast[] = [];
-    for (const [validTimeStr, forecasts] of Object.entries(validTimeGroups)) {
-        const vt = parseInt(validTimeStr, 10);
-        if (forecasts.length < 2) continue;
+        // Scope the data processing to ensure variables can be GC'd immediately after the block
+        {
+            const rows = db.prepare(`
+                SELECT data FROM forecasts 
+                WHERE valid_time >= ? AND valid_time < ?
+            `).all(currentStart, currentEnd) as { data: string }[];
 
-        const representativeIssueTime = forecasts[0].issue_time;
+            if (rows.length > 0) {
+                const relevantForecasts: Forecast[] = rows.map(r => JSON.parse(r.data));
 
-        const avgRecord: Partial<Forecast> = {
-            id: `average_of_models_${representativeIssueTime}_${vt}`,
-            model_id: 'average_of_models',
-            issue_time: representativeIssueTime,
-            valid_time: vt
-        };
-        const medRecord: Partial<Forecast> = {
-            id: `median_of_models_${representativeIssueTime}_${vt}`,
-            model_id: 'median_of_models',
-            issue_time: representativeIssueTime,
-            valid_time: vt
-        };
+                // Group by BOTH valid_time AND issue_time
+                const groups: Record<string, Forecast[]> = {};
 
-        for (const varName of FORECAST_VARIABLES) {
-            const values = forecasts
-                .map(f => f[varName as keyof Forecast])
-                .filter(v => v !== null && v !== undefined && Number.isFinite(v as number)) as number[];
-
-            if (values.length > 0) {
-                if (varName === 'wind_direction_10m') {
-                    let sumSin = 0;
-                    let sumCos = 0;
-                    values.forEach(deg => {
-                        const rad = deg * (Math.PI / 180);
-                        sumSin += Math.sin(rad);
-                        sumCos += Math.cos(rad);
-                    });
-                    let avgDeg = Math.atan2(sumSin, sumCos) * (180 / Math.PI);
-                    if (avgDeg < 0) avgDeg += 360;
-                    (avgRecord as any)[varName] = avgDeg;
-
-                    const deviations = values.map(deg => {
-                        let diff = deg - avgDeg;
-                        while (diff <= -180) diff += 360;
-                        while (diff > 180) diff -= 360;
-                        return { deg, diff: Math.abs(diff) };
-                    });
-                    deviations.sort((a, b) => a.diff - b.diff);
-                    (medRecord as any)[varName] = deviations[0].deg;
-
-                } else {
-                    const sum = values.reduce((a, b) => a + b, 0);
-                    (avgRecord as any)[varName] = (sum / values.length);
-                    const sorted = [...values].sort((a, b) => a - b);
-                    const mid = Math.floor(sorted.length / 2);
-                    (medRecord as any)[varName] = (sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]);
-                }
-            } else {
-                (avgRecord as any)[varName] = null;
-                (medRecord as any)[varName] = null;
-            }
-        }
-        syntheticForecasts.push(avgRecord as Forecast, medRecord as Forecast);
-    }
-
-    if (syntheticForecasts.length > 0) {
-        const insert = db.prepare(`
-            INSERT OR REPLACE INTO forecasts (id, model_id, issue_time, valid_time, data)
-            VALUES (@id, @model_id, @issue_time, @valid_time, @data)
-        `);
-        const transaction = db.transaction((list: Forecast[]) => {
-            for (const f of list) {
-                insert.run({
-                    id: f.id,
-                    model_id: f.model_id,
-                    issue_time: f.issue_time,
-                    valid_time: f.valid_time,
-                    data: JSON.stringify(f)
+                relevantForecasts.forEach(f => {
+                    if (f.model_id.includes('_of_models')) return;
+                    const key = `${f.valid_time}_${f.issue_time}`;
+                    if (!groups[key]) groups[key] = [];
+                    groups[key].push(f);
                 });
+
+                const syntheticForecasts: Forecast[] = [];
+                for (const forecasts of Object.values(groups)) {
+                    if (forecasts.length < 2) continue;
+
+                    const vt = forecasts[0].valid_time;
+                    const it = forecasts[0].issue_time;
+
+                    const avgRecord: Partial<Forecast> = {
+                        id: `average_of_models_${it}_${vt}`,
+                        model_id: 'average_of_models',
+                        issue_time: it,
+                        valid_time: vt
+                    };
+                    const medRecord: Partial<Forecast> = {
+                        id: `median_of_models_${it}_${vt}`,
+                        model_id: 'median_of_models',
+                        issue_time: it,
+                        valid_time: vt
+                    };
+
+                    for (const varName of FORECAST_VARIABLES) {
+                        const values = forecasts
+                            .map(f => f[varName as keyof Forecast])
+                            .filter(v => v !== null && v !== undefined && Number.isFinite(v as number)) as number[];
+
+                        if (values.length > 0) {
+                            if (varName === 'wind_direction_10m') {
+                                let sumSin = 0;
+                                let sumCos = 0;
+                                values.forEach(deg => {
+                                    const rad = deg * (Math.PI / 180);
+                                    sumSin += Math.sin(rad);
+                                    sumCos += Math.cos(rad);
+                                });
+                                let avgDeg = Math.atan2(sumSin, sumCos) * (180 / Math.PI);
+                                if (avgDeg < 0) avgDeg += 360;
+                                (avgRecord as any)[varName] = avgDeg;
+
+                                const deviations = values.map(deg => {
+                                    let diff = deg - avgDeg;
+                                    while (diff <= -180) diff += 360;
+                                    while (diff > 180) diff -= 360;
+                                    return { deg, diff: Math.abs(diff) };
+                                });
+                                deviations.sort((a, b) => a.diff - b.diff);
+                                (medRecord as any)[varName] = deviations[0].deg;
+
+                            } else {
+                                const sum = values.reduce((a, b) => a + b, 0);
+                                (avgRecord as any)[varName] = (sum / values.length);
+                                const sorted = [...values].sort((a, b) => a - b);
+                                const mid = Math.floor(sorted.length / 2);
+                                (medRecord as any)[varName] = (sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]);
+                            }
+                        } else {
+                            (avgRecord as any)[varName] = null;
+                            (medRecord as any)[varName] = null;
+                        }
+                    }
+                    syntheticForecasts.push(avgRecord as Forecast, medRecord as Forecast);
+                }
+
+                if (syntheticForecasts.length > 0) {
+                    const insert = db.prepare(`
+                        INSERT OR REPLACE INTO forecasts (id, model_id, issue_time, valid_time, data)
+                        VALUES (@id, @model_id, @issue_time, @valid_time, @data)
+                    `);
+                    const transaction = db.transaction((list: Forecast[]) => {
+                        for (const f of list) {
+                            insert.run({
+                                id: f.id,
+                                model_id: f.model_id,
+                                issue_time: f.issue_time,
+                                valid_time: f.valid_time,
+                                data: JSON.stringify(f)
+                            });
+                        }
+                    });
+                    transaction(syntheticForecasts);
+                    totalGenerated += syntheticForecasts.length;
+                }
             }
-        });
-        transaction(syntheticForecasts);
-        log(`[SYNTHETIC] Generated ${syntheticForecasts.length / 2} hours for Average and Median models`);
+        } // End of scope block
+
+        // Force GC if available
+        if (global.gc) {
+            global.gc();
+        }
     }
+
+    log(`[SYNTHETIC] Generated ${totalGenerated / 2} hours for Average and Median models (Chunked Processing)`);
 }
 
 export async function fetchAllModels() {
@@ -723,163 +749,183 @@ export async function fetchAllModels() {
 export async function runVerification(): Promise<void> {
     log('[VERIFY] Starting verification process...');
 
-    const obsRows = db.prepare('SELECT data FROM observations').all() as { data: string }[];
-    const observations: Observation[] = obsRows.map(r => JSON.parse(r.data));
+    // 1. Determine Time Range
+    const range = db.prepare('SELECT MIN(valid_time) as minTime, MAX(valid_time) as maxTime FROM forecasts').get() as { minTime: number, maxTime: number };
 
-    const fcstRows = db.prepare('SELECT data FROM forecasts').all() as { data: string }[];
-    const allForecasts: Forecast[] = fcstRows.map(r => JSON.parse(r.data));
+    if (!range.minTime || !range.maxTime) {
+        log('[VERIFY] No forecasts found to verify.');
+        return;
+    }
 
-    const forecastsByTime: Record<number, Forecast[]> = allForecasts.reduce((acc, f) => {
-        acc[f.valid_time] = acc[f.valid_time] || [];
-        acc[f.valid_time].push(f);
-        return acc;
-    }, {} as Record<number, Forecast[]>);
+    const CHUNK_SIZE = 6 * 3600 * 1000; // 6 Hours
+    let totalVerified = 0;
 
-    const verifications: Verification[] = [];
+    // 2. Iterate in Chunks
+    for (let currentStart = range.minTime; currentStart <= range.maxTime; currentStart += CHUNK_SIZE) {
+        const currentEnd = currentStart + CHUNK_SIZE;
 
-    for (const obs of observations) {
-        const matchingForecasts = forecastsByTime[obs.obs_time] || [];
+        // Scope block for GC
+        {
+            // Load Observations for this window (plus buffer for matching)
+            const obsRows = db.prepare(`
+                SELECT data FROM observations 
+                WHERE obs_time >= ? AND obs_time < ?
+            `).all(currentStart - 3600000, currentEnd + 3600000) as { data: string }[];
 
-        for (const forecast of matchingForecasts) {
-            const leadTime = (forecast.valid_time - forecast.issue_time) / (3600 * 1000);
+            const observations: Observation[] = obsRows.map(r => JSON.parse(r.data));
+            const obsMap = new Map<number, Observation>();
+            observations.forEach(o => obsMap.set(o.obs_time, o));
 
-            if (leadTime < 0) continue;
+            // Load Forecasts for this window
+            const fcstRows = db.prepare(`
+                SELECT data FROM forecasts 
+                WHERE valid_time >= ? AND valid_time < ?
+            `).all(currentStart, currentEnd) as { data: string }[];
 
-            for (const { name, obsKey } of VERIFICATION_VARIABLES) {
+            if (fcstRows.length === 0) continue;
 
-                let obsVal: number | null = null;
-                let fcstVal: number | null = forecast[name as keyof Forecast] as number | null;
+            const forecasts: Forecast[] = fcstRows.map(r => JSON.parse(r.data));
+            const verifications: Verification[] = [];
 
-                if (name === 'wind_vector') {
-                    const fSpd = forecast.wind_speed_10m;
-                    const fDir = forecast.wind_direction_10m;
-                    const oSpd = obs.wind_speed ?? null;
-                    const oDir = obs.wind_dir ?? null;
+            for (const forecast of forecasts) {
+                const obs = obsMap.get(forecast.valid_time);
+                if (!obs) continue;
 
-                    if (fSpd === null || oSpd === null || fDir === null || oDir === null) continue;
+                const leadTime = (forecast.valid_time - forecast.issue_time) / 3600000;
+                if (leadTime < 0) continue;
 
-                    const toRad = Math.PI / 180;
-                    const fU = -fSpd * Math.sin(fDir * toRad);
-                    const fV = -fSpd * Math.cos(fDir * toRad);
-                    const oU = -oSpd * Math.sin(oDir * toRad);
-                    const oV = -oSpd * Math.cos(oDir * toRad);
+                for (const name of FORECAST_VARIABLES) {
+                    const fcstVal = (forecast as any)[name];
 
-                    const vectorError = Math.sqrt(Math.pow(fU - oU, 2) + Math.pow(fV - oV, 2));
+                    // Find matching observation key
+                    const mapping = VERIFICATION_VARIABLES.find(m => m.name === name);
+                    if (!mapping) continue;
 
-                    verifications.push({
-                        key: `${forecast.model_id}_wind_vector_${forecast.valid_time}_${leadTime.toFixed(1)}`,
-                        model_id: forecast.model_id, variable: 'wind_vector', valid_time: forecast.valid_time,
-                        issue_time: forecast.issue_time, lead_time_hours: leadTime,
-                        forecast_value: fSpd, observed_value: oSpd,
-                        error: vectorError, absolute_error: vectorError, squared_error: vectorError * vectorError,
-                        percentage_error: null, bias: vectorError
-                    });
-                    continue;
-                }
+                    let obsKey = mapping.obsKey;
+                    let obsVal: number | null = null;
 
-                if (name === 'precipitation_probability') {
-                    if (fcstVal === null) continue;
-                    const p = fcstVal / 100;
-                    // STRICT: Use ONLY METAR weather codes for occurrence. Ignore ERA5 amounts for probability/occurrence.
-                    const obsHasPrecip = (obs.weather_codes && obs.weather_codes.length > 0);
-                    const o = obsHasPrecip ? 1 : 0;
-                    const brier = Math.pow(p - o, 2);
-                    verifications.push({
-                        key: `${forecast.model_id}_precip_prob_${forecast.valid_time}_${leadTime.toFixed(1)}`,
-                        model_id: forecast.model_id, variable: 'precipitation_probability', valid_time: forecast.valid_time,
-                        issue_time: forecast.issue_time, lead_time_hours: leadTime,
-                        forecast_value: fcstVal, observed_value: o * 100,
-                        error: brier, absolute_error: brier, squared_error: brier,
-                        percentage_error: null, bias: p - o
-                    });
-                    continue;
-                }
+                    // Special Handling for Wind Direction
+                    if (name === 'wind_direction_10m') {
+                        const oDir = obs.wind_dir;
+                        if (fcstVal === null || oDir === null || oDir === undefined) continue;
 
-                if (name.includes('occurrence')) {
-                    let p = 0;
-                    let o = 0;
-                    const code = forecast.weather_code || 0;
+                        let diff = Math.abs(fcstVal - oDir);
+                        if (diff > 180) diff = 360 - diff;
 
-                    if (name === 'rain_occurrence') {
-                        if (forecast.weather_code === null && forecast.rain === null) continue;
-                        const fHas = (forecast.rain && forecast.rain > 0.1) || (code >= 50 && code <= 69) || (code >= 80 && code <= 99);
-                        p = fHas ? 1 : 0;
-                        // STRICT: METAR Only
-                        o = (obs.weather_codes && obs.weather_codes.includes('RA')) ? 1 : 0;
-                    } else if (name === 'snow_occurrence') {
-                        if (forecast.weather_code === null && forecast.snowfall === null) continue;
-                        const fHas = (forecast.snowfall && forecast.snowfall > 0.1) || (code >= 70 && code <= 79) || (code >= 85 && code <= 86);
-                        p = fHas ? 1 : 0;
-                        // STRICT: METAR Only
-                        o = (obs.weather_codes && obs.weather_codes.includes('SN')) ? 1 : 0;
-                    } else if (name === 'freezing_rain_occurrence') {
-                        if (forecast.weather_code === null) continue;
-                        const fHas = [56, 57, 66, 67].includes(code);
-                        p = fHas ? 1 : 0;
-                        // STRICT: METAR Only
-                        o = (obs.weather_codes && obs.weather_codes.includes('FZRA')) ? 1 : 0;
+                        verifications.push({
+                            key: `${forecast.model_id}_${name}_${forecast.valid_time}_${leadTime.toFixed(1)}`,
+                            model_id: forecast.model_id, variable: name, valid_time: forecast.valid_time,
+                            issue_time: forecast.issue_time, lead_time_hours: leadTime,
+                            forecast_value: fcstVal, observed_value: oDir,
+                            error: diff, absolute_error: diff, squared_error: diff * diff,
+                            percentage_error: null, bias: 0 // Direction bias is tricky, using 0 placeholder
+                        });
+                        continue;
                     }
 
-                    verifications.push({
-                        key: `${forecast.model_id}_${name}_${forecast.valid_time}_${leadTime.toFixed(1)}`,
-                        model_id: forecast.model_id, variable: name, valid_time: forecast.valid_time,
-                        issue_time: forecast.issue_time, lead_time_hours: leadTime,
-                        forecast_value: p, observed_value: o,
-                        error: Math.abs(p - o), absolute_error: Math.abs(p - o), squared_error: Math.pow(p - o, 2),
-                        percentage_error: null, bias: p - o
-                    });
-                    continue;
-                }
+                    if (name === 'precipitation_probability') {
+                        if (fcstVal === null) continue;
+                        const p = fcstVal / 100;
+                        // STRICT: Use ONLY METAR weather codes for occurrence. Ignore ERA5 amounts for probability/occurrence.
+                        const obsHasPrecip = (obs.weather_codes && obs.weather_codes.length > 0);
+                        const o = obsHasPrecip ? 1 : 0;
+                        const brier = Math.pow(p - o, 2);
+                        verifications.push({
+                            key: `${forecast.model_id}_precip_prob_${forecast.valid_time}_${leadTime.toFixed(1)}`,
+                            model_id: forecast.model_id, variable: 'precipitation_probability', valid_time: forecast.valid_time,
+                            issue_time: forecast.issue_time, lead_time_hours: leadTime,
+                            forecast_value: fcstVal, observed_value: o * 100,
+                            error: brier, absolute_error: brier, squared_error: brier,
+                            percentage_error: null, bias: p - o
+                        });
+                        continue;
+                    }
 
-                // Standard Continuous Variables
-                if (obsKey === 'era_rain_amt') obsVal = obs.era_rain_amt;
-                else if (obsKey === 'era_snow_amt') obsVal = obs.era_snow_amt;
-                else if (obsKey === 'precip_1h') obsVal = obs.era_precip_amt ?? obs.precip_1h; // Prefer ERA5 precip amount if available? No, wait.
-                // Actually, for precipitation amount, we use ERA5 if METAR is missing it?
-                // The constant says: { name: 'precipitation', obsKey: 'precip_1h', threshold: 0.5 }
-                // And obs.precip_1h is from METAR.
-                // But we also have { name: 'rain', obsKey: 'era_rain_amt' }
+                    if (name.includes('occurrence')) {
+                        let p = 0;
+                        let o = 0;
+                        const code = forecast.weather_code || 0;
 
-                // Let's stick to the key mapping
-                if (obsVal === null) {
-                    obsVal = (obs as any)[obsKey];
-                }
+                        if (name === 'rain_occurrence') {
+                            if (forecast.weather_code === null && forecast.rain === null) continue;
+                            const fHas = (forecast.rain && forecast.rain > 0.1) || (code >= 50 && code <= 69) || (code >= 80 && code <= 99);
+                            p = fHas ? 1 : 0;
+                            // STRICT: METAR Only
+                            o = (obs.weather_codes && obs.weather_codes.includes('RA')) ? 1 : 0;
+                        } else if (name === 'snow_occurrence') {
+                            if (forecast.weather_code === null && forecast.snowfall === null) continue;
+                            const fHas = (forecast.snowfall && forecast.snowfall > 0.1) || (code >= 70 && code <= 79) || (code >= 85 && code <= 86);
+                            p = fHas ? 1 : 0;
+                            // STRICT: METAR Only
+                            o = (obs.weather_codes && obs.weather_codes.includes('SN')) ? 1 : 0;
+                        } else if (name === 'freezing_rain_occurrence') {
+                            if (forecast.weather_code === null) continue;
+                            const fHas = [56, 57, 66, 67].includes(code);
+                            p = fHas ? 1 : 0;
+                            // STRICT: METAR Only
+                            o = (obs.weather_codes && obs.weather_codes.includes('FZRA')) ? 1 : 0;
+                        }
 
-                if (obsVal !== null && fcstVal !== null) {
-                    const error = fcstVal - obsVal;
-                    const absError = Math.abs(error);
-                    const sqError = error * error;
-                    const pctError = obsVal !== 0 ? (absError / Math.abs(obsVal)) * 100 : null;
+                        verifications.push({
+                            key: `${forecast.model_id}_${name}_${forecast.valid_time}_${leadTime.toFixed(1)}`,
+                            model_id: forecast.model_id, variable: name, valid_time: forecast.valid_time,
+                            issue_time: forecast.issue_time, lead_time_hours: leadTime,
+                            forecast_value: p, observed_value: o,
+                            error: Math.abs(p - o), absolute_error: Math.abs(p - o), squared_error: Math.pow(p - o, 2),
+                            percentage_error: null, bias: p - o
+                        });
+                        continue;
+                    }
 
-                    verifications.push({
-                        key: `${forecast.model_id}_${name}_${forecast.valid_time}_${leadTime.toFixed(1)}`,
-                        model_id: forecast.model_id, variable: name, valid_time: forecast.valid_time,
-                        issue_time: forecast.issue_time, lead_time_hours: leadTime,
-                        forecast_value: fcstVal, observed_value: obsVal,
-                        error: error, absolute_error: absError, squared_error: sqError,
-                        percentage_error: pctError, bias: error
-                    });
+                    // Standard Continuous Variables
+                    if (obsKey === 'era_rain_amt') obsVal = obs.era_rain_amt;
+                    else if (obsKey === 'era_snow_amt') obsVal = obs.era_snow_amt;
+                    else if (obsKey === 'precip_1h') obsVal = obs.era_precip_amt ?? obs.precip_1h;
+
+                    if (obsVal === null) {
+                        obsVal = (obs as any)[obsKey];
+                    }
+
+                    if (obsVal !== null && fcstVal !== null) {
+                        const error = fcstVal - obsVal;
+                        const absError = Math.abs(error);
+                        const sqError = error * error;
+                        const pctError = obsVal !== 0 ? (absError / Math.abs(obsVal)) * 100 : null;
+
+                        verifications.push({
+                            key: `${forecast.model_id}_${name}_${forecast.valid_time}_${leadTime.toFixed(1)}`,
+                            model_id: forecast.model_id, variable: name, valid_time: forecast.valid_time,
+                            issue_time: forecast.issue_time, lead_time_hours: leadTime,
+                            forecast_value: fcstVal, observed_value: obsVal,
+                            error: error, absolute_error: absError, squared_error: sqError,
+                            percentage_error: pctError, bias: error
+                        });
+                    }
                 }
             }
-        }
+
+            if (verifications.length > 0) {
+                const insert = db.prepare(`
+                    INSERT OR REPLACE INTO verifications (
+                        key, model_id, variable, valid_time, issue_time, lead_time_hours,
+                        forecast_value, observed_value, error, absolute_error, squared_error, bias
+                    ) VALUES (
+                        @key, @model_id, @variable, @valid_time, @issue_time, @lead_time_hours,
+                        @forecast_value, @observed_value, @error, @absolute_error, @squared_error, @bias
+                    )
+                `);
+                const transaction = db.transaction((list: Verification[]) => {
+                    for (const v of list) {
+                        insert.run(v);
+                    }
+                });
+                transaction(verifications);
+                totalVerified += verifications.length;
+            }
+        } // End Scope
+
+        if (global.gc) global.gc();
     }
 
-    if (verifications.length > 0) {
-        const insert = db.prepare(`
-            INSERT OR REPLACE INTO verifications (
-                key, model_id, variable, valid_time, issue_time, lead_time_hours,
-                forecast_value, observed_value, error, absolute_error, squared_error, bias
-            ) VALUES (
-                @key, @model_id, @variable, @valid_time, @issue_time, @lead_time_hours,
-                @forecast_value, @observed_value, @error, @absolute_error, @squared_error, @bias
-            )
-        `);
-        const transaction = db.transaction((list: Verification[]) => {
-            for (const v of list) {
-                insert.run(v);
-            }
-        });
-        transaction(verifications);
-        log(`[VERIFY] Stored ${verifications.length} verification records.`);
-    }
+    log(`[VERIFY] Verification Complete. Total records: ${totalVerified}`);
 }
