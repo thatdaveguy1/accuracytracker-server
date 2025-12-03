@@ -128,7 +128,6 @@ async function updateCycle() {
         await weatherService.fetchMETARHistory();
         await weatherService.fetchAllModels();
         await weatherService.runVerification();
-        await weatherService.runVerification();
 
         // NEW: Aggregate stats for today (and yesterday to be safe)
         const today = new Date().toISOString().split('T')[0];
