@@ -57,7 +57,9 @@ export async function backfillProbabilities() {
 
             if (config.provider === 'ensemble') {
                 let model = config.apiModel;
-                url = `https://ensemble-api.open-meteo.com/v1/ensemble?${baseParams}&models=${model}`;
+                // Use the standard Forecast API for ensembles to get summary variables like precipitation_probability
+                // The Ensemble API returns member-specific data which is not what we want here.
+                url = `https://api.open-meteo.com/v1/forecast?${baseParams}&models=${model}`;
             } else {
                 let model = config.apiModel;
                 url = `https://api.open-meteo.com/v1/${config.provider}?${baseParams}`;
