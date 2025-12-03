@@ -92,7 +92,7 @@ app.post('/api/trigger-update', async (req, res) => {
     try {
         console.log('[MANUAL] Triggering update...');
         // Run in background to avoid timeout
-        runUpdateCycle().catch(err => console.error('[MANUAL] Update failed:', err));
+        updateCycle().catch(err => console.error('[MANUAL] Update failed:', err));
         res.json({ message: 'Update cycle started' });
     } catch (e) {
         res.status(500).json({ error: String(e) });
@@ -117,7 +117,7 @@ app.post('/api/reset', (req, res) => {
 
 let isUpdating = false;
 
-async function runUpdateCycle() {
+async function updateCycle() {
     if (isUpdating) {
         console.log('[UPDATE] Cycle already running, skipping.');
         return;
@@ -149,13 +149,20 @@ async function runUpdateCycle() {
 
 // Run every hour at minute 5 (e.g. 12:05, 13:05) to allow data to settle
 cron.schedule('5 * * * *', () => {
-    runUpdateCycle();
+    updateCycle();
 });
 
 // NEW: Run daily pruning at 02:00 AM
 cron.schedule('0 2 * * *', () => {
     statsService.pruneOldData();
 });
+
+// Run backfill once on startup to fix missing probabilities
+import { backfillProbabilities } from './services/backfillService';
+backfillProbabilities().then(() => {
+    // Initial Update after backfill (or concurrent? better sequential to avoid DB lock contention)
+    updateCycle();
+}).catch(err => console.error('[BACKFILL] Failed:', err));
 
 // --- Admin Routes ---
 
