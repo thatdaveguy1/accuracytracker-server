@@ -64,6 +64,7 @@ export async function backfillProbabilities() {
                 if (model) url += `&models=${model}`;
             }
 
+            log(`Fetching URL: ${url}`);
             const res = await fetchWithRetry(url);
             if (!res.ok) {
                 log(`Failed to fetch for ${config.id}: ${res.status} ${res.statusText}`);
