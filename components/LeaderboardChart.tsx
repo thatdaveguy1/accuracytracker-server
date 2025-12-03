@@ -87,8 +87,9 @@ const LeaderboardChart: React.FC<LeaderboardChartProps> = ({ data, bucketName, s
                             dataKey="name"
                             type="category"
                             stroke="#94a3b8"
-                            width={110}
+                            width={140}
                             tick={{ fontSize: 10, fontWeight: 500, fill: '#cbd5e1' }}
+                            tickFormatter={(value) => value.length > 20 ? `${value.substring(0, 18)}...` : value}
                             axisLine={false}
                             tickLine={false}
                             interval={0} // Show all ticks
